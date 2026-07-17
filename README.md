@@ -1,4 +1,6 @@
-![Rendezvous](https://shieldcn.dev/header/graph.svg?title=Rendezvous&subtitle=Find+the+place+that+works+for+everyone&logo=ri%3AFaMapMarkedAlt&mode=dark)
+<p align="center">
+  <img alt="Rendezvous" src="https://shieldcn.dev/header/graph.svg?title=Rendezvous&subtitle=Find+the+place+that+works+for+everyone&logo=ri%3AFaMapMarkedAlt&mode=dark" />
+</p>
 
 <p align="center">
   <img alt="ClickHouse" src="https://img.shields.io/badge/ClickHouse-FFCC01?style=for-the-badge&logo=clickhouse&logoColor=black" />
