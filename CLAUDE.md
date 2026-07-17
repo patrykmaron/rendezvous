@@ -49,6 +49,10 @@ Key stack details that differ from common defaults:
 - **Icons are Phosphor** (`@phosphor-icons/react`), per `components.json` (`iconLibrary: "phosphor"`).
 - **Theming** via `next-themes` (`ThemeProvider` in `apps/web/components/theme-provider.tsx`); fonts are Geist (`--font-sans`), Geist Mono (`--font-mono`), and Lora (`--font-heading`) wired as CSS variables in `apps/web/app/layout.tsx`.
 
+## Architecture decisions
+
+Significant architectural decisions are recorded as ADRs in `docs/adr/` (see the index in `docs/adr/README.md`). When you make a decision of that weight — new dependency, data-model change, cross-cutting convention, reversal of a prior decision — add a new numbered ADR from `docs/adr/template.md` and update the index. Never edit an accepted ADR; supersede it with a new one.
+
 ## Databases
 
 Two databases, one package (`@workspace/db`, raw-TS exports, no build step):

@@ -70,6 +70,7 @@ The analysis funnel keeps routing cheap and ranking powerful:
 | `packages/tasks` | `@workspace/tasks` — Trigger.dev workflows |
 | `packages/ui` | `@workspace/ui` — shared shadcn/ui components (Base UI + Tailwind v4) |
 | `packages/eslint-config` / `packages/typescript-config` | shared tooling configs |
+| `docs/adr` | [Architecture Decision Records](docs/adr/README.md) — why the system is shaped the way it is |
 
 ## Getting started
 
