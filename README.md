@@ -1,5 +1,5 @@
 <p align="center">
-  <img alt="Rendezvous" src="https://shieldcn.dev/header/graph.svg?title=Rendezvous&subtitle=Find+the+place+that+works+for+everyone&logo=ri%3AFaMapMarkedAlt&mode=dark" />
+  <img alt="Rendezvous" width="100%" src="https://shieldcn.dev/header/graph.svg?title=Rendezvous&subtitle=Find+the+place+that+works+for+everyone&logo=ri%3AFaMapMarkedAlt&mode=dark" />
 </p>
 
 <p align="center">
