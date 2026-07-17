@@ -1,0 +1,39 @@
+{
+  "name": "@workspace/db",
+  "version": "0.0.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "lint": "eslint",
+    "format": "prettier --write \"**/*.ts\"",
+    "typecheck": "tsc --noEmit",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:studio": "drizzle-kit studio",
+    "ch:migrate": "dotenv -e ../../.env -- sh -c 'clickhouse-migrations migrate --host=\"$CLICKHOUSE_URL\" --user=\"$CLICKHOUSE_USER\" --password=\"$CLICKHOUSE_PASSWORD\" --db=\"$CLICKHOUSE_DATABASE\" --migrations-home=./clickhouse/migrations'",
+    "smoke": "tsx --env-file=../../.env src/smoke.ts"
+  },
+  "exports": {
+    "./postgres": "./src/postgres/client.ts",
+    "./schema": "./src/postgres/schema.ts",
+    "./clickhouse": "./src/clickhouse/client.ts",
+    "./clickhouse/query": "./src/clickhouse/query.ts"
+  },
+  "dependencies": {
+    "@clickhouse/client": "^1.23.1",
+    "drizzle-orm": "^0.45.2",
+    "postgres": "^3.4.9"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@workspace/eslint-config": "workspace:*",
+    "@workspace/typescript-config": "workspace:*",
+    "clickhouse-migrations": "^1.3.2",
+    "dotenv": "^17.2.3",
+    "dotenv-cli": "^10.0.0",
+    "drizzle-kit": "^0.31.10",
+    "eslint": "^9.32.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.2"
+  }
+}

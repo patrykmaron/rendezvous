@@ -1,6 +1,15 @@
 {
   "$schema": "https://turbo.build/schema.json",
   "ui": "tui",
+  "globalEnv": [
+    "NODE_ENV",
+    "DATABASE_URL",
+    "DATABASE_URL_DIRECT",
+    "CLICKHOUSE_URL",
+    "CLICKHOUSE_USER",
+    "CLICKHOUSE_PASSWORD",
+    "CLICKHOUSE_DATABASE"
+  ],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
