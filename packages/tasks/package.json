@@ -1,0 +1,17 @@
+{
+  "name": "@workspace/tasks",
+  "type": "module",
+  "scripts": {
+    "dev": "tsc --watch",
+    "build": "tsc"
+  },
+  "exports": {},
+  "devDependencies": {
+    "@trigger.dev/build": "4.5.4",
+    "@workspace/typescript-config": "workspace:*",
+    "typescript": "latest"
+  },
+  "dependencies": {
+    "@trigger.dev/sdk": "4.5.4"
+  }
+}

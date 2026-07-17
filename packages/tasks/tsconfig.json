@@ -1,0 +1,12 @@
+{
+  "extends": "@workspace/typescript-config/base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src"
+  },
+  "include": [
+    "src",
+    "trigger.config.ts"
+  ],
+  "exclude": ["node_modules", "dist"]
+}
