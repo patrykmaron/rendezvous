@@ -1,11 +1,13 @@
 "use client"
 
 import * as React from "react"
+import dynamic from "next/dynamic"
 
 import {
   ClientSideSuspense,
   LiveblocksProvider,
   RoomProvider,
+  useEventListener,
   useOthers,
   useSelf,
   useUpdateMyPresence,
@@ -13,7 +15,6 @@ import {
 import { ChatCircleDotsIcon } from "@phosphor-icons/react/dist/csr/ChatCircleDots"
 import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check"
 import { MapPinIcon } from "@phosphor-icons/react/dist/csr/MapPin"
-import { MapTrifoldIcon } from "@phosphor-icons/react/dist/csr/MapTrifold"
 import { SparkleIcon } from "@phosphor-icons/react/dist/csr/Sparkle"
 import { SpinnerIcon } from "@phosphor-icons/react/dist/csr/Spinner"
 
@@ -36,6 +37,22 @@ import {
   setRoomSession,
   type RoomSession,
 } from "@/lib/session"
+import type { MapOverlay, OriginPoint } from "@/lib/types"
+
+// mapbox-gl touches `window`/`document` at module scope, so the map is loaded
+// client-only (never server-rendered). ssr:false is valid here because this
+// file is a Client Component (see Next.js lazy-loading guide).
+const RoomMap = dynamic(
+  () => import("@/components/map/room-map").then((m) => m.RoomMap),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex h-full w-full items-center justify-center text-muted-foreground">
+        <SpinnerIcon className="size-5 animate-spin" />
+      </div>
+    ),
+  }
+)
 
 function initialOf(name: string): string {
   return name.trim().charAt(0).toUpperCase() || "?"
@@ -242,6 +259,87 @@ function RoomView({
     others.map((o) => o.presence.color ?? o.info.color)
   )
 
+  // Map state lives here (not in the map) so the map stays mounted across chat
+  // interactions and Task 9 can feed the overlay without restructuring.
+  const [origins, setOrigins] = React.useState<OriginPoint[]>([])
+  // Overlay = agent-produced pins/routes/focus. State + setter are kept ready
+  // so Task 9 only adds a producing hook that calls setOverlay.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [overlay, setOverlay] = React.useState<MapOverlay>({
+    pins: [],
+    routes: null,
+    focus: null,
+  })
+
+  // participantId → {name, color}, used to enrich origin:update nudges (which
+  // carry only coordinates) without a round-trip. Refetched if an unknown
+  // participant appears (e.g. someone who joined after this map loaded).
+  const membersRef = React.useRef<
+    Map<string, { name: string; color: string }>
+  >(new Map())
+
+  const loadMembers = React.useCallback(async () => {
+    try {
+      const res = await fetch(`/api/rooms/${roomId}/members`)
+      if (!res.ok) return
+      const members: Array<{
+        participantId: string
+        name: string
+        color: string
+      }> = await res.json()
+      membersRef.current = new Map(
+        members.map((m) => [m.participantId, { name: m.name, color: m.color }])
+      )
+    } catch {
+      // Non-fatal: enrichment falls back to a full origins refetch.
+    }
+  }, [roomId])
+
+  const loadOrigins = React.useCallback(async () => {
+    try {
+      const res = await fetch(`/api/rooms/${roomId}/origins`, {
+        headers: { Authorization: `Bearer ${session.sessionToken}` },
+      })
+      if (!res.ok) return
+      const data: OriginPoint[] = await res.json()
+      setOrigins(data)
+    } catch {
+      // Non-fatal: the map shows no origins until the next nudge lands.
+    }
+  }, [roomId, session.sessionToken])
+
+  React.useEffect(() => {
+    void loadMembers()
+    // Fetch-on-mount: setOrigins runs asynchronously after the await, not
+    // synchronously in the effect body, so it doesn't cascade renders.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void loadOrigins()
+  }, [loadMembers, loadOrigins])
+
+  // origin:update is a nudge (ADR 0012): apply the payload with name/colour
+  // from the members map, or refetch authoritatively if the member is unknown.
+  useEventListener(({ event }) => {
+    if (event.type !== "origin:update") return
+    const member = membersRef.current.get(event.participantId)
+    if (!member) {
+      void loadMembers()
+      void loadOrigins()
+      return
+    }
+    const next: OriginPoint = {
+      participantId: event.participantId,
+      name: member.name,
+      color: member.color,
+      lat: event.lat,
+      lng: event.lng,
+      ...(event.label ? { label: event.label } : {}),
+    }
+    setOrigins((prev) => [
+      ...prev.filter((o) => o.participantId !== next.participantId),
+      next,
+    ])
+  })
+
   function handleColorChange(hex: string) {
     if (hex === myColor) {
       setColorOpen(false)
@@ -344,12 +442,17 @@ function RoomView({
       </header>
 
       <main className="flex min-h-0 flex-1">
-        <div
-          id="map-pane"
-          className="relative flex h-full flex-1 flex-col items-center justify-center gap-2 bg-[radial-gradient(var(--color-border)_1px,transparent_1px)] [background-size:16px_16px] text-muted-foreground"
-        >
-          <MapTrifoldIcon className="size-8" />
-          <p className="text-xs">Map coming in Task 5</p>
+        <div id="map-pane" className="relative h-full flex-1">
+          <RoomMap
+            roomId={roomId}
+            session={{
+              participantId: session.participantId,
+              sessionToken: session.sessionToken,
+              color: myColor,
+            }}
+            origins={origins}
+            overlay={overlay}
+          />
         </div>
         <aside className="flex h-full w-[380px] shrink-0 flex-col border-l border-border">
           <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-4 text-muted-foreground">
