@@ -857,7 +857,8 @@ export const roomAgentTask = schemaTask({
       logger.error("room-agent run failed", { error: String(err) })
       return await failGracefully(
         "Sorry, something went wrong while planning your meetup — please try again.",
-        err instanceof Error ? err.message : "unknown error"
+        err instanceof Error ? err.message : "unknown error",
+        { skipChat: state.semanticFailureNarrated === true }
       )
     }
   },
