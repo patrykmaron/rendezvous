@@ -1,6 +1,6 @@
 # 0012. Liveblocks for ephemeral multiplayer state only
 
-**Status:** Accepted (not yet implemented)
+**Status:** Accepted (implemented; see ADR 0014)
 **Date:** 2026-07-17
 
 ## Context
@@ -18,4 +18,4 @@ The rule: **Liveblocks shows what someone is *doing*; Postgres records what they
 - One source of truth; replaying `room_events` reconstructs any room without consulting the realtime layer.
 - Losing the Liveblocks connection degrades presence, never data.
 - Slightly more plumbing than mutating shared realtime storage directly — accepted to keep the event log authoritative.
-- Not yet implemented; this ADR fixes the boundary before the first line of realtime code is written.
+- This ADR fixed the boundary before the first line of realtime code was written; the mechanism it sketched shipped, refined, in [0014](0014-realtime-broadcasts-and-session-identity.md).
