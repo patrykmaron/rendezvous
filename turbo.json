@@ -12,7 +12,9 @@
     "TFL_PRIMARY_KEY",
     "TFL_SECONDARY_KEY",
     "LIVEBLOCKS_SECRET_KEY",
-    "LIVEBLOCKS_PUB_KEY"
+    "NEXT_PUBLIC_MAPBOX_TOKEN",
+    "TRIGGER_SECRET_KEY",
+    "OPENAI_KEY"
   ],
   "tasks": {
     "build": {

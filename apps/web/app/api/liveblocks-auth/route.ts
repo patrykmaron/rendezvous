@@ -53,7 +53,12 @@ export async function POST(request: Request): Promise<Response> {
   const session = liveblocks.prepareSession(participantId, {
     userInfo: { name, color },
   })
-  session.allow(room, session.FULL_ACCESS)
+  // Read + presence only — NOT FULL_ACCESS. Every legitimate broadcast is
+  // fired by a server-side secret-key client (the server actions / Trigger.dev
+  // tasks). Granting write here would let any member's browser forge room
+  // broadcasts (e.g. fake `message:new`, `plan:updated`). Clients still read
+  // events and publish presence (cursors, colour, typing).
+  session.allow(room, ["room:read", "room:presence:write"])
   const { status, body: authBody } = await session.authorize()
   return new Response(authBody, {
     status,

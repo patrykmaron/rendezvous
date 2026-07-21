@@ -180,20 +180,26 @@ export function ChatPanel({
   // deduping by id (the sender sees both the action's return and its own
   // message:new echo).
   const appendMessage = React.useCallback((incoming: ChatMessage) => {
+    // Defensive: a broadcast may arrive without `reactions` (older senders /
+    // the task-side broadcaster); the message list reads it unconditionally.
+    const message: ChatMessage = {
+      ...incoming,
+      reactions: incoming.reactions ?? [],
+    }
     setMessages((prev) => {
-      if (prev.some((m) => m.id === incoming.id)) return prev
+      if (prev.some((m) => m.id === message.id)) return prev
       const optimisticIdx = prev.findIndex(
         (m) =>
           m.id.startsWith(OPTIMISTIC_PREFIX) &&
-          m.participantId === incoming.participantId &&
-          m.content === incoming.content
+          m.participantId === message.participantId &&
+          m.content === message.content
       )
       if (optimisticIdx >= 0) {
         const next = prev.slice()
-        next[optimisticIdx] = incoming
+        next[optimisticIdx] = message
         return next
       }
-      return [...prev, incoming]
+      return [...prev, message]
     })
   }, [])
 

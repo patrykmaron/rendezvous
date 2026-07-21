@@ -13,6 +13,7 @@ import { requireMember } from "@/lib/auth"
 import { broadcastRoomEvent } from "@/lib/liveblocks-server"
 import { isReactionEmoji } from "@/lib/reactions"
 import type { ChatMessage } from "@/lib/types"
+import { UUID_RE } from "@/lib/validate"
 
 // A message triggers the agent when it @-mentions it (word-boundary, so
 // "@agentic" doesn't match).
@@ -101,10 +102,17 @@ export async function sendMessage(
   // prompting for start points instead of silently doing nothing.
   if (AGENT_MENTION_RE.test(trimmed)) {
     try {
+      // inserted.id is a DB-generated uuid, but guard it anyway so a non-uuid
+      // can never reach the task's `z.uuid()` schema (which would throw at
+      // trigger time after the snapshot row was already inserted). Drop it to
+      // undefined rather than error — attribution is optional.
+      const triggerMessageId = UUID_RE.test(inserted.id)
+        ? inserted.id
+        : undefined
       await startAnalysis({
         roomId,
         participantId: participant.id,
-        triggerMessageId: inserted.id,
+        triggerMessageId,
       })
     } catch (err) {
       if (err instanceof NeedsOriginsError) {
@@ -141,6 +149,13 @@ export async function toggleReaction(
   emoji: string
 ): Promise<ToggleReactionResult> {
   const { participant } = await requireMember(sessionToken, roomId)
+
+  // Validate the id shape before it hits the DB: a non-uuid would otherwise
+  // raise a raw "invalid input syntax for type uuid" from Postgres on the
+  // lookup below. Rejected the same way the emoji check is.
+  if (!UUID_RE.test(messageId)) {
+    throw new Error("Invalid message id.")
+  }
 
   if (!isReactionEmoji(emoji)) {
     throw new Error("Unsupported reaction.")

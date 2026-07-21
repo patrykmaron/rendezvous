@@ -37,7 +37,7 @@ import { Input } from "@workspace/ui/components/input"
 import { Toaster, toast } from "@workspace/ui/components/sonner"
 import { cn } from "@workspace/ui/lib/utils"
 
-import { cellToLatLng } from "h3-js"
+import { cellToLatLng, isValidCell } from "h3-js"
 
 import { askAgent } from "@/app/actions/agent"
 import { changeColor, joinRoom } from "@/app/actions/room"
@@ -45,7 +45,12 @@ import { ChatPanel } from "@/components/chat/chat-panel"
 import { useAgentToasts } from "@/hooks/use-agent-toasts"
 import { isFinalStatus, useRoomAgent } from "@/hooks/use-room-agent"
 import { PARTICIPANT_COLORS } from "@/lib/colors"
-import { getRoomSession, setRoomSession, type RoomSession } from "@/lib/session"
+import {
+  clearRoomSession,
+  getRoomSession,
+  setRoomSession,
+  type RoomSession,
+} from "@/lib/session"
 import type { MapOverlay, OriginPoint, PlanCandidate } from "@/lib/types"
 
 // mapbox-gl touches `window`/`document` at module scope, so the map is loaded
@@ -364,10 +369,17 @@ function RoomView({
 
     let center: { lat: number; lng: number } | null = null
     try {
-      const [lat, lng] = cellToLatLng(candidate.h3)
-      if (Number.isFinite(lat) && Number.isFinite(lng)) center = { lat, lng }
+      // candidate.h3 is a DECIMAL string (ADR 0008); h3-js speaks hex. Passing
+      // the decimal straight to cellToLatLng parses it as hex and flies the map
+      // to the wrong place (mid-Atlantic). Convert first, then validate.
+      const hex = BigInt(candidate.h3).toString(16)
+      if (isValidCell(hex)) {
+        const [lat, lng] = cellToLatLng(hex)
+        if (Number.isFinite(lat) && Number.isFinite(lng)) center = { lat, lng }
+      }
     } catch {
-      // Malformed H3 cell — fall through to the venue centroid.
+      // Malformed H3 cell (non-numeric string) — fall through to the venue
+      // centroid.
     }
     if (!center && venuePoints.length > 0) {
       const sum = venuePoints.reduce(
@@ -452,6 +464,21 @@ function RoomView({
   useEventListener(({ event }) => {
     if (event.type === "member:update") {
       if (event.participantId === session.participantId) return
+      // Keep the members cache and any existing origin pin in sync with the
+      // new name/colour — a colour change must recolour the pin on the map,
+      // not merely raise a toast (origin pins carry the durable colour, which
+      // this event is the live refresh for).
+      membersRef.current.set(event.participantId, {
+        name: event.name,
+        color: event.color,
+      })
+      setOrigins((prev) =>
+        prev.map((o) =>
+          o.participantId === event.participantId
+            ? { ...o, name: event.name, color: event.color }
+            : o
+        )
+      )
       toast.info(
         event.kind === "joined"
           ? `${event.name} joined`
@@ -754,15 +781,20 @@ export function RoomShell({
   const [localSession, setLocalSession] = React.useState<RoomSession | null>(
     null
   )
-  const session = localSession ?? storedSession
+  // Set when a Liveblocks auth attempt returns 401 — a stale sessionStorage
+  // token (e.g. after a DB reset). Forces the join gate to re-render instead
+  // of spinning forever on doomed auth retries; cleared again on a fresh join.
+  const [authRejected, setAuthRejected] = React.useState(false)
+  const session = authRejected ? null : (localSession ?? storedSession)
+
+  const handleJoined = React.useCallback((next: RoomSession) => {
+    setAuthRejected(false)
+    setLocalSession(next)
+  }, [])
 
   if (!session) {
     return (
-      <JoinGate
-        roomId={roomId}
-        roomName={roomName}
-        onJoined={setLocalSession}
-      />
+      <JoinGate roomId={roomId} roomName={roomName} onJoined={handleJoined} />
     )
   }
 
@@ -785,6 +817,16 @@ export function RoomShell({
             sessionToken: activeSession.sessionToken,
           }),
         })
+        if (!res.ok) {
+          // A stale sessionStorage token (e.g. after a DB reset) 401s here.
+          // Clear it and drop back to the join gate rather than letting
+          // Liveblocks retry a doomed auth forever behind the spinner.
+          if (res.status === 401) {
+            clearRoomSession(roomId)
+            setAuthRejected(true)
+          }
+          throw new Error(`Liveblocks auth failed: ${res.status}`)
+        }
         return res.json()
       }}
     >

@@ -503,6 +503,9 @@ export const roomAgentTask = schemaTask({
               content: text,
               createdAt: result.createdAt.toISOString(),
               author: { name: AGENT_NAME, color: AGENT_COLOR },
+              // Chat clients read message.reactions unconditionally; a new
+              // assistant message has none yet.
+              reactions: [],
             },
           })
         } catch (e) {
@@ -552,30 +555,44 @@ export const roomAgentTask = schemaTask({
       return { kind: "config_error" as const }
     }
 
-    // 1. Load room context.
-    const ctx = await loadContext(roomId, triggerMessageId)
-    const roomRevision = ctx.room.currentRevision
+    // 1-2. Load room context and check origins INSIDE a guard, so any pre-loop
+    // failure (e.g. loadContext throwing on a missing room, or an invalid
+    // triggerMessageId) is narrated via failGracefully instead of escaping as
+    // an uncaught run failure that leaves the snapshot stuck "running". The
+    // needs_origins branch is NOT an error: it returns normally from inside the
+    // guard (status waiting_input, not error), exactly as before.
+    let ctx: LoadedContext
+    let roomRevision: number
+    try {
+      ctx = await loadContext(roomId, triggerMessageId)
+      roomRevision = ctx.room.currentRevision
 
-    // 2. Not enough origins → ask for them and stop (this is not an error;
-    // status is waiting_input, not error). markPlanFailed's own broadcast is
-    // isolated so a Liveblocks hiccup can't turn this into a thrown run.
-    if (ctx.origins.length < 2) {
-      setStatus("waiting_input", "Waiting for start points")
-      await postAssistantMessage(
-        "I need at least two people to share where they're setting off from before I can plan — please drop your start points on the map!"
-      )
-      try {
-        await markPlanFailed(
-          analysisId,
-          roomId,
-          "Fewer than two participant origins"
+      if (ctx.origins.length < 2) {
+        setStatus("waiting_input", "Waiting for start points")
+        await postAssistantMessage(
+          "I need at least two people to share where they're setting off from before I can plan — please drop your start points on the map!"
         )
-      } catch (e) {
-        logger.warn("markPlanFailed broadcast failed (non-fatal)", {
-          error: String(e),
-        })
+        // markPlanFailed's own broadcast is isolated so a Liveblocks hiccup
+        // can't turn this into a thrown run.
+        try {
+          await markPlanFailed(
+            analysisId,
+            roomId,
+            "Fewer than two participant origins"
+          )
+        } catch (e) {
+          logger.warn("markPlanFailed broadcast failed (non-fatal)", {
+            error: String(e),
+          })
+        }
+        return { kind: "needs_origins" as const }
       }
-      return { kind: "needs_origins" as const }
+    } catch (err) {
+      logger.error("room-agent load failed", { error: String(err) })
+      return await failGracefully(
+        "Sorry, something went wrong while planning your meetup — please try again.",
+        err instanceof Error ? err.message : "unknown error"
+      )
     }
 
     const origins: AnalysisOrigin[] = ctx.origins.map((o) => ({
@@ -850,7 +867,21 @@ export const roomAgentTask = schemaTask({
       // winner's venue pins, focused/routed to the winner).
       publishFinalOverlay(result, ctx, state)
 
-      await finalizePlanTask.triggerAndWait({ analysisId, roomId, result })
+      // Persist the plan (durable write + analysis_completed event). If the
+      // child fails, the plan was NOT saved — narrate it rather than claiming
+      // "Plan ready" over a snapshot still stuck "running".
+      const fin = await finalizePlanTask.triggerAndWait({
+        analysisId,
+        roomId,
+        result,
+      })
+      if (!fin.ok) {
+        return await failGracefully(
+          "Sorry — I couldn't save the plan. Please try again.",
+          "finalize-plan failed",
+          { skipChat: state.semanticFailureNarrated === true }
+        )
+      }
       setStatus("done", "Plan ready")
       return { kind: "ok" as const, candidates: result.candidates.length }
     } catch (err) {

@@ -2,6 +2,7 @@
 
 import { requireMember } from "@/lib/auth"
 import { NeedsOriginsError, startAnalysis } from "@/lib/agent-trigger"
+import { UUID_RE } from "@/lib/validate"
 
 // Server actions are public HTTP endpoints (callable directly, not just from
 // the header button) — membership is proven here first. requireMember throws
@@ -26,11 +27,20 @@ export async function askAgent(
 ): Promise<AskAgentResult> {
   const { participant } = await requireMember(sessionToken, roomId)
 
+  // triggerMessageId is optional attribution only — never trust the caller's
+  // value. Drop a malformed id (it would otherwise be rejected by the task's
+  // uuid schema at trigger time, wedging the just-inserted snapshot) rather
+  // than erroring: the analysis still runs, just without attribution.
+  const validTriggerMessageId =
+    triggerMessageId && UUID_RE.test(triggerMessageId)
+      ? triggerMessageId
+      : undefined
+
   try {
     const { runId, analysisId } = await startAnalysis({
       roomId,
       participantId: participant.id,
-      triggerMessageId,
+      triggerMessageId: validTriggerMessageId,
     })
     return { ok: true, runId, analysisId }
   } catch (err) {

@@ -17,6 +17,15 @@ export type TaskRoomEvent =
         content: string
         createdAt: string
         author?: { name: string; color: string }
+        // Chat clients read `message.reactions` unconditionally; a broadcast
+        // that omits it crashes their render. New messages carry an empty
+        // array. Mirrors MessageReactionSummary[] in apps/web/lib/types.ts.
+        reactions: {
+          emoji: string
+          count: number
+          reactedByMe: boolean
+          names: string[]
+        }[]
       }
     }
 

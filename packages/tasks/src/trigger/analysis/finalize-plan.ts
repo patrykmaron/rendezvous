@@ -41,7 +41,16 @@ export const finalizePlanTask = schemaTask({
       },
     })
 
-    await broadcastRoomEvent(roomId, { type: "plan:updated", analysisId })
+    // Best-effort nudge (ADR 0014): the durable write above already committed,
+    // so a Liveblocks hiccup must not fail the attempt post-commit — a retry
+    // would append a duplicate analysis_completed event.
+    try {
+      await broadcastRoomEvent(roomId, { type: "plan:updated", analysisId })
+    } catch (e) {
+      logger.warn("plan:updated broadcast failed (non-fatal)", {
+        error: String(e),
+      })
+    }
 
     logger.info("plan finalized", {
       analysisId,
@@ -77,5 +86,14 @@ export async function markPlanFailed(
     },
   })
 
-  await broadcastRoomEvent(roomId, { type: "plan:updated", analysisId })
+  // Best-effort nudge (ADR 0014) — wrapped so a post-commit Liveblocks failure
+  // can't fail the attempt and trigger a duplicate analysis_completed event on
+  // retry.
+  try {
+    await broadcastRoomEvent(roomId, { type: "plan:updated", analysisId })
+  } catch (e) {
+    logger.warn("plan:updated broadcast failed (non-fatal)", {
+      error: String(e),
+    })
+  }
 }

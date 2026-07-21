@@ -81,6 +81,10 @@ export const tflJourneyPlanTask = schemaTask({
         // Not ApiError JSON — keep the raw snippet.
       }
       metadata.root.increment("routesFailed", 1)
+      // A no-route answer is still a completed journey slot — advance the
+      // parent's (done/total) counter too, or routing progress stalls below
+      // total whenever any leg 404s. routesFailed still records the failure.
+      metadata.root.increment("routesDone", 1)
       logger.warn("journey planner found no route", { from, to, message })
       return { kind: "no_journeys", message }
     }
