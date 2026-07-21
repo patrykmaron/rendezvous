@@ -46,7 +46,7 @@ Key stack details that differ from common defaults:
 
 - **UI primitives are Base UI (`@base-ui/react`), not Radix.** Components follow the shadcn "base-lyra" style with `class-variance-authority` variants; see `packages/ui/src/components/button.tsx` for the canonical pattern (`data-slot` attribute, `cn()` from `@workspace/ui/lib/utils`).
 - **Tailwind CSS v4** — no `tailwind.config` file; theme and CSS variables live in `packages/ui/src/styles/globals.css`.
-- **Icons are Phosphor** (`@phosphor-icons/react`), per `components.json` (`iconLibrary: "phosphor"`).
+- **Icons are Phosphor** (`@phosphor-icons/react`), per `components.json` (`iconLibrary: "phosphor"`). Import each icon from its subpath (`@phosphor-icons/react/dist/csr/<Name>`), not the package root — the root barrel doesn't resolve under this repo's NodeNext module resolution.
 - **Theming** via `next-themes` (`ThemeProvider` in `apps/web/components/theme-provider.tsx`); fonts are Geist (`--font-sans`), Geist Mono (`--font-mono`), and Lora (`--font-heading`) wired as CSS variables in `apps/web/app/layout.tsx`.
 
 ## Architecture decisions
@@ -60,7 +60,7 @@ Two databases, one package (`@workspace/db`, raw-TS exports, no build step):
 - **ClickHouse Managed Postgres** (OLTP: rooms, participants, constraints, votes, events) via **Drizzle ORM**. Schema: `packages/db/src/postgres/schema.ts`. Runtime connections go through **PgBouncer (port 6432)** — the client sets `prepare: false`; migrations use the **direct port 5432** URL (`DATABASE_URL_DIRECT`).
 - **ClickHouse Cloud** (OLAP: 4.4M-row Foursquare `places` serving table, `route_observations`, `candidate_scores`) via `@clickhouse/client`. Migrations are plain SQL files in `packages/db/clickhouse/migrations/` applied by the `clickhouse-migrations` CLI.
 
-Imports: `@workspace/db/postgres` (lazy `getDb()`, re-exports `sql`/`eq`/...), `@workspace/db/schema`, `@workspace/db/clickhouse`, `@workspace/db/clickhouse/query` (`chQuery`/`chInsert`/`chCommand`/`toChDateTime`).
+Imports: `@workspace/db/postgres` (lazy `getDb()`, re-exports `sql`/`eq`/...), `@workspace/db/schema`, `@workspace/db/clickhouse`, `@workspace/db/clickhouse/query` (`chQuery`/`chInsert`/`chCommand`/`toChDateTime`), `@workspace/db/revision` (`withRoomRevision` — every durable room write goes through it).
 
 Env setup (one-time): copy `.env.example` to `.env` at the repo root, fill values, then:
 

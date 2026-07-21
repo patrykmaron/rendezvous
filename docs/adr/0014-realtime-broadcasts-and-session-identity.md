@@ -1,0 +1,30 @@
+# 0014. Full-payload Liveblocks broadcasts and sessionStorage identity for the realtime frontend
+
+**Status:** Accepted
+**Date:** 2026-07-21
+
+## Context
+
+[0012](0012-liveblocks-ephemeral-only.md) fixed the boundary before any realtime code existed: Liveblocks holds only ephemeral, presence-shaped state; Postgres is the only durable store. Its Decision text sketched the mechanism as a small "state changed" nudge (e.g. `PLAN_UPDATED`) that clients receive and then refetch authoritative state for. Building the chat, map presence, and membership UI (WS3/4/6/10) against that mechanism made the cost concrete: every chat message, reaction, or dropped pin would need a full authenticated re-fetch of its list on every tab, on every change, just to render one new row that the write path already had in hand. Separately, the app has no accounts or cookies — the hackathon demo runs multiple "participants" from browser windows on one machine — so identity and Liveblocks auth both had to be solved without a login system.
+
+## Decision
+
+The boundary from ADR 0012 is unchanged and this ADR does not supersede it: Liveblocks still never stores constraints, origins, votes, messages, or plans, and Postgres remains the only place that can reconstruct a room. What shipped refines the *mechanism* the Decision text sketched:
+
+- Every durable write (`sendMessage`, `toggleReaction`, `setOrigin`, `joinRoom`, `changeColor`, and the agent's own chat/plan writes — `apps/web/app/actions/*.ts`, `apps/web/lib/agent-trigger.ts`, `packages/tasks/src/trigger/room-agent.ts`) goes through the ADR 0007 `withRoomRevision` transaction first. Only after it commits does the write path call `broadcastRoomEvent` (`apps/web/lib/liveblocks-server.ts`, and its ~10-line duplicate `packages/tasks/src/lib/liveblocks.ts` for Trigger.dev tasks — a package can't import an app).
+- Most broadcasts (`message:new`, `reaction:update`, `origin:update`, `member:update` — the `RoomEvent` union in `apps/web/liveblocks.config.ts`) carry the **full new/changed record**, not just an id. `useEventListener` handlers apply the payload directly to local state (`chat-panel.tsx`'s `appendMessage`/`applyReaction`, `room-shell.tsx`'s origins map) — no refetch in the common case. `reaction:update` in particular is the *only* place reaction counts change; there is no optimistic local patch on click, so add/remove can't double-count against their own echo.
+- Two events stay genuine nudges, because the payload would be large or is better served by a separate channel: `plan:updated` (id only; triggers `loadPlan()`) and `agent:started` (run id only; the run's live state rides Trigger.dev metadata/streams, per [0015](0015-room-agent-openai-tool-loop.md)).
+- `origin:update` is a middle case: it carries coordinates but not name/colour (kept off the wire), reconstructed client-side from a members cache (`membersRef`) that's fetched lazily; a cache miss falls back to a full `loadMembers` + `loadOrigins` refetch.
+- Broadcasts are always fired **after** the transaction commits and are **best-effort** — wrapped in try/catch, logged with `console.warn`/`logger.warn`, never rethrown. A Liveblocks hiccup must never fail a durable write or abort planning.
+- Identity has no cookies or accounts. Each browser tab stores `{participantId, sessionToken, name, color}` in `sessionStorage` keyed per room (`apps/web/lib/session.ts`), written after `joinRoom`/`changeColor`. `participants.sessionToken` (a UUID) is the sole bearer credential; every server action and route resolves it via `requireMember` (`apps/web/lib/auth.ts`) — an `Authorization: Bearer` header for routes, a plain argument for server actions — with no query-string fallback, since a bearer credential must never land in logs or referrers. Two windows on one machine are therefore two genuinely separate participants, which is deliberate: it's how the hackathon demo simulates a group with one machine.
+- Liveblocks auth is an **access-token endpoint** (`/api/liveblocks-auth`), not a public API key embedded in the client. `LiveblocksProvider`'s `authEndpoint` POSTs `{room, sessionToken}`; the route re-verifies membership server-side via `requireMember` and mints a token scoped with `session.allow(room, FULL_ACCESS)` to exactly that `room:<id>` — a token for room A cannot touch room B. `userInfo` (name, colour) is baked into the token once, at connection time.
+- Colour is dual-homed by design: `changeColor` durably writes `participants.color`, then the client calls `updateMyPresence({color})` so every connected peer sees the new colour immediately, without forcing a Liveblocks reconnect just to refresh `userInfo`. Every read prefers `presence.color ?? info.color`.
+
+## Consequences
+
+- No offline delivery: a disconnected tab never sees a broadcast that fired while it was away. Correctness still depends on Postgres hydration on mount (`loadHistory`/`loadOrigins`/`loadMembers`) catching up any (re)joining tab — the broadcast is a same-session latency optimization, never the only delivery path, so ADR 0012's invariant (Postgres is authoritative; Liveblocks is disposable) holds even though most events skip the "refetch" step in the common case.
+- Adding a new durable write path means remembering both halves — the `withRoomRevision` call and the post-commit broadcast — or the feature silently degrades to "works after a manual refresh only."
+- A window exists between the durable colour write and the presence patch where `userInfo.color` and `presence.color` can disagree; harmless, since both read paths prefer presence.
+- Full-payload broadcasts couple the `RoomEvent` union to the durable row shapes (`ChatMessage`, `ReactionUpdate`) — widening one of those types is a coordinated change across the action, the broadcast call, and every listener, not an isolated edit.
+- sessionStorage identity means logging out is just closing the tab, and there is no cross-device session — acceptable for a single-session planning tool, not for a persistent account model.
+
