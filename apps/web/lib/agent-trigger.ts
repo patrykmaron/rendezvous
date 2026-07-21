@@ -1,6 +1,8 @@
+import "server-only"
+
 import { tasks } from "@trigger.dev/sdk"
 
-import { eq, getDb } from "@workspace/db/postgres"
+import { eq, getDb, sql } from "@workspace/db/postgres"
 import { withRoomRevision } from "@workspace/db/revision"
 import {
   messages,
@@ -50,6 +52,9 @@ export type StartAnalysisResult = { runId: string; analysisId: string }
  *
  * Returns the run id + analysis id. Requires TRIGGER_SECRET_KEY for step 4 —
  * without it `tasks.trigger` throws (auth), after steps 1-3 have already run.
+ * That throw is caught and marks the just-inserted snapshot "failed" (rather
+ * than leaving it stuck "running" forever) before rethrowing, so callers
+ * still see the failure and the plan card doesn't get permanently blanked.
  */
 export async function startAnalysis(opts: {
   roomId: string
@@ -102,11 +107,39 @@ export async function startAnalysis(opts: {
 
   // 4. Trigger the orchestrator. Tagged so the room's realtime token (scoped to
   // `room:<id>`) and useRoomAgent's tag subscription can see this run.
-  const handle = await tasks.trigger<RoomAgentTask>(
-    "room-agent",
-    { roomId, analysisId, triggerMessageId, participantId },
-    { tags: [`room:${roomId}`] }
-  )
+  let handle: Awaited<ReturnType<typeof tasks.trigger<RoomAgentTask>>>
+  try {
+    handle = await tasks.trigger<RoomAgentTask>(
+      "room-agent",
+      { roomId, analysisId, triggerMessageId, participantId },
+      { tags: [`room:${roomId}`] }
+    )
+  } catch (err) {
+    // Steps 1-3 already committed, so the snapshot inserted in step 2 is
+    // otherwise stuck in "running" forever — the /plan route returns the
+    // newest snapshot regardless of status, and the plan card renders
+    // nothing for "running", which would permanently blank a previously
+    // complete plan. This is a plain update by analysisId, not a
+    // withRoomRevision write: the analysis_requested event from step 3
+    // already recorded the attempt, so no additional revision event is
+    // needed for this internal bookkeeping.
+    try {
+      await db
+        .update(planSnapshots)
+        .set({
+          status: "failed",
+          error: err instanceof Error ? err.message : String(err),
+          completedAt: sql`now()`,
+        })
+        .where(eq(planSnapshots.analysisId, analysisId))
+    } catch (updateErr) {
+      console.warn(
+        "startAnalysis: failed to mark snapshot failed after trigger error",
+        updateErr
+      )
+    }
+    throw err
+  }
 
   // 5. Nudge every tab that a run has started (ADR 0012). Best-effort.
   try {
