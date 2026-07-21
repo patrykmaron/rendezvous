@@ -1,0 +1,94 @@
+import { chQuery } from "@workspace/db/clickhouse/query"
+import { logger, schemaTask } from "@trigger.dev/sdk"
+import { z } from "zod"
+
+const getVenuesPayload = z.object({
+  h3Cells: z.array(z.string()).min(1).max(3),
+  categories: z.array(z.string()).optional(),
+})
+
+export type Venue = {
+  h3: string
+  fsqPlaceId: string
+  name: string
+  lat: number
+  lng: number
+  category: string
+  address?: string
+}
+
+type GetVenuesOutput = { kind: "ok"; venues: Venue[] }
+
+/**
+ * Fetch representative venues for the finalist areas (ADR 0008 funnel, step 4).
+ * Per-cell top 5 by a stable order (there is no rating column — non-empty names
+ * first, then fsq_place_id). Cells bind as Array(String) → toUInt64 in SQL.
+ */
+export const getVenuesTask = schemaTask({
+  id: "ch-get-venues",
+  schema: getVenuesPayload,
+  maxDuration: 60,
+  run: async ({ h3Cells, categories }): Promise<GetVenuesOutput> => {
+    const categoryFilter =
+      categories && categories.length > 0
+        ? "AND hasAny(category_labels, {cats:Array(String)})"
+        : ""
+
+    const rows = await chQuery<{
+      h3: string
+      fsqPlaceId: string
+      name: string
+      lat: number
+      lng: number
+      category: string
+      address: string
+      postcode: string
+      locality: string
+    }>(
+      `SELECT toString(h3_8) AS h3,
+              fsqPlaceId, name, lat, lng, category, address, postcode, locality
+       FROM (
+         SELECT h3_8,
+                fsq_place_id AS fsqPlaceId,
+                name,
+                latitude AS lat,
+                longitude AS lng,
+                primary_category AS category,
+                address,
+                postcode,
+                locality,
+                ROW_NUMBER() OVER (
+                  PARTITION BY h3_8 ORDER BY notEmpty(name) DESC, fsq_place_id
+                ) AS rn
+         FROM places
+         WHERE h3_8 IN (SELECT toUInt64(arrayJoin({cells:Array(String)})))
+           AND is_closed = 0 AND has_quality_warning = 0
+           ${categoryFilter}
+       )
+       WHERE rn <= 5
+       ORDER BY h3, rn`,
+      { cells: h3Cells, ...(categoryFilter ? { cats: categories } : {}) }
+    )
+
+    const venues: Venue[] = rows.map((r) => {
+      const address =
+        r.address.trim() ||
+        [r.locality, r.postcode].filter((s) => s.trim()).join(", ")
+      return {
+        h3: r.h3,
+        fsqPlaceId: r.fsqPlaceId,
+        name: r.name,
+        lat: r.lat,
+        lng: r.lng,
+        category: r.category,
+        ...(address ? { address } : {}),
+      }
+    })
+
+    logger.info("venues fetched", {
+      cells: h3Cells.length,
+      venues: venues.length,
+    })
+    return { kind: "ok", venues }
+  },
+})
