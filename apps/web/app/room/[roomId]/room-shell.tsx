@@ -14,11 +14,18 @@ import {
 } from "@liveblocks/react/suspense"
 import { ChatCircleDotsIcon } from "@phosphor-icons/react/dist/csr/ChatCircleDots"
 import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check"
+import { LinkIcon } from "@phosphor-icons/react/dist/csr/Link"
 import { MapPinIcon } from "@phosphor-icons/react/dist/csr/MapPin"
 import { SparkleIcon } from "@phosphor-icons/react/dist/csr/Sparkle"
 import { SpinnerIcon } from "@phosphor-icons/react/dist/csr/Spinner"
+import { XIcon } from "@phosphor-icons/react/dist/csr/X"
 
-import { Avatar, AvatarFallback, AvatarGroup } from "@workspace/ui/components/avatar"
+import {
+  Avatar,
+  AvatarFallback,
+  AvatarGroup,
+  AvatarGroupCount,
+} from "@workspace/ui/components/avatar"
 import { Button } from "@workspace/ui/components/button"
 import {
   DropdownMenu,
@@ -38,11 +45,7 @@ import { ChatPanel } from "@/components/chat/chat-panel"
 import { useAgentToasts } from "@/hooks/use-agent-toasts"
 import { isFinalStatus, useRoomAgent } from "@/hooks/use-room-agent"
 import { PARTICIPANT_COLORS } from "@/lib/colors"
-import {
-  getRoomSession,
-  setRoomSession,
-  type RoomSession,
-} from "@/lib/session"
+import { getRoomSession, setRoomSession, type RoomSession } from "@/lib/session"
 import type { MapOverlay, OriginPoint, PlanCandidate } from "@/lib/types"
 
 // mapbox-gl touches `window`/`document` at module scope, so the map is loaded
@@ -59,6 +62,11 @@ const RoomMap = dynamic(
     ),
   }
 )
+
+// Cap the presence stack so it can't grow unbounded on a crowded room; the
+// rest collapse into a single "+N" badge (also keeps the mobile header from
+// overflowing horizontally).
+const MAX_VISIBLE_OTHERS = 4
 
 function initialOf(name: string): string {
   return name.trim().charAt(0).toUpperCase() || "?"
@@ -264,6 +272,30 @@ function RoomView({
   const othersColors = new Set(
     others.map((o) => o.presence.color ?? o.info.color)
   )
+  const visibleOthers = others.slice(0, MAX_VISIBLE_OTHERS)
+  const hiddenOthersCount = others.length - visibleOthers.length
+
+  // Mobile (<md) chat sheet: hidden by default, toggled by the floating chat
+  // button; desktop always shows the chat panel and never reads this state
+  // (see the `md:` overrides below). `hasUnread` lights the button's dot when
+  // a message arrives from someone else while the sheet is closed.
+  const [chatOpen, setChatOpen] = React.useState(false)
+  const [hasUnread, setHasUnread] = React.useState(false)
+  function openChat() {
+    setChatOpen(true)
+    setHasUnread(false)
+  }
+
+  const handleCopyLink = React.useCallback(() => {
+    if (typeof navigator === "undefined" || !navigator.clipboard) {
+      toast.error("Couldn't copy the link")
+      return
+    }
+    navigator.clipboard
+      .writeText(window.location.href)
+      .then(() => toast.success("Link copied"))
+      .catch(() => toast.error("Couldn't copy the link"))
+  }, [])
 
   // Map state lives here (not in the map) so the map stays mounted across chat
   // interactions and Task 9 can feed the overlay without restructuring.
@@ -372,9 +404,9 @@ function RoomView({
   // participantId → {name, color}, used to enrich origin:update nudges (which
   // carry only coordinates) without a round-trip. Refetched if an unknown
   // participant appears (e.g. someone who joined after this map loaded).
-  const membersRef = React.useRef<
-    Map<string, { name: string; color: string }>
-  >(new Map())
+  const membersRef = React.useRef<Map<string, { name: string; color: string }>>(
+    new Map()
+  )
 
   const loadMembers = React.useCallback(async () => {
     try {
@@ -427,6 +459,14 @@ function RoomView({
       )
       return
     }
+    if (event.type === "message:new") {
+      // Mobile-only signal: the sheet is always open on desktop, so this is a
+      // no-op there.
+      if (!chatOpen && event.message.participantId !== session.participantId) {
+        setHasUnread(true)
+      }
+      return
+    }
     if (event.type !== "origin:update") return
     const member = membersRef.current.get(event.participantId)
     if (!member) {
@@ -468,18 +508,31 @@ function RoomView({
 
   return (
     <div className="flex h-svh flex-col bg-background">
-      <header className="flex h-14 shrink-0 items-center justify-between border-b border-border px-4">
-        <div className="flex items-center gap-2">
+      <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border px-4">
+        <div className="flex min-w-0 items-center gap-2">
           <MapPinIcon
-            className="size-4 text-muted-foreground"
+            className="size-4 shrink-0 text-muted-foreground"
             weight="fill"
           />
-          <h1 className="font-heading text-lg font-medium tracking-tight">
+          <h1
+            className="truncate font-heading text-lg font-medium tracking-tight"
+            title={roomName}
+          >
             {roomName}
           </h1>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            aria-label="Copy room link"
+            onClick={handleCopyLink}
+            className="shrink-0 text-muted-foreground"
+          >
+            <LinkIcon />
+          </Button>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex shrink-0 items-center gap-3">
           <AvatarGroup>
             <DropdownMenu open={colorOpen} onOpenChange={setColorOpen}>
               <DropdownMenuTrigger
@@ -503,9 +556,7 @@ function RoomView({
                         type="button"
                         disabled={takenByOther || isChanging}
                         aria-pressed={selected}
-                        aria-label={
-                          takenByOther ? `${c.name} (taken)` : c.name
-                        }
+                        aria-label={takenByOther ? `${c.name} (taken)` : c.name}
                         title={takenByOther ? `${c.name} — taken` : c.name}
                         onClick={() => handleColorChange(c.hex)}
                         className={cn(
@@ -532,7 +583,7 @@ function RoomView({
               </DropdownMenuContent>
             </DropdownMenu>
 
-            {others.map((other) => (
+            {visibleOthers.map((other) => (
               <InitialAvatar
                 key={other.connectionId}
                 name={other.info.name}
@@ -540,6 +591,12 @@ function RoomView({
                 title={other.info.name}
               />
             ))}
+
+            {hiddenOthersCount > 0 ? (
+              <AvatarGroupCount title={`${hiddenOthersCount} more`}>
+                +{hiddenOthersCount}
+              </AvatarGroupCount>
+            ) : null}
           </AvatarGroup>
 
           {(() => {
@@ -553,10 +610,7 @@ function RoomView({
               // Wrapper span carries the native tooltip: a disabled button
               // doesn't emit hover events, so `pointer-events-none` lets the
               // hover fall through to the span's `title`.
-              <span
-                title={disabledReason ?? undefined}
-                className="inline-flex"
-              >
+              <span title={disabledReason ?? undefined} className="inline-flex">
                 <Button
                   variant="outline"
                   size="sm"
@@ -586,10 +640,30 @@ function RoomView({
             overlay={overlay}
           />
         </div>
-        <aside className="flex h-full w-[380px] shrink-0 flex-col border-l border-border">
+        {/* Mobile (<md): a full-height sheet toggled by the floating chat
+            button below, sliding up over the map. Desktop (md+): the usual
+            static 380px side panel — the `md:` overrides win regardless of
+            `chatOpen`. */}
+        <aside
+          className={cn(
+            "fixed inset-x-0 top-14 bottom-0 z-30 flex flex-col border-t border-border bg-background transition-transform duration-200 ease-out",
+            chatOpen ? "translate-y-0" : "pointer-events-none translate-y-full",
+            "md:pointer-events-auto md:static md:inset-auto md:z-auto md:h-full md:w-[380px] md:shrink-0 md:translate-y-0 md:border-t-0 md:border-l"
+          )}
+        >
           <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-4 text-muted-foreground">
             <ChatCircleDotsIcon className="size-4" />
             <span className="text-xs font-medium">Chat</span>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              aria-label="Close chat"
+              onClick={() => setChatOpen(false)}
+              className="ml-auto md:hidden"
+            >
+              <XIcon />
+            </Button>
           </div>
           <ChatPanel
             roomId={roomId}
@@ -605,6 +679,26 @@ function RoomView({
             onFocusCandidate={focusCandidate}
           />
         </aside>
+
+        {!chatOpen ? (
+          <div className="fixed right-4 bottom-4 z-40 md:hidden">
+            <Button
+              type="button"
+              size="icon-lg"
+              aria-label={hasUnread ? "Open chat — new messages" : "Open chat"}
+              onClick={openChat}
+              className="shadow-md"
+            >
+              <ChatCircleDotsIcon weight="fill" />
+            </Button>
+            {hasUnread ? (
+              <span
+                aria-hidden="true"
+                className="pointer-events-none absolute top-0.5 right-0.5 size-2.5 rounded-full bg-destructive ring-2 ring-background"
+              />
+            ) : null}
+          </div>
+        ) : null}
       </main>
 
       <Toaster position="bottom-left" />

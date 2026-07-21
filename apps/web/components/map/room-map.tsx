@@ -2,7 +2,11 @@
 
 import * as React from "react"
 
-import { useOthersMapped, useSelf, useUpdateMyPresence } from "@liveblocks/react/suspense"
+import {
+  useOthersMapped,
+  useSelf,
+  useUpdateMyPresence,
+} from "@liveblocks/react/suspense"
 import { MapPinIcon } from "@phosphor-icons/react/dist/csr/MapPin"
 import Map, {
   Layer,
@@ -292,7 +296,9 @@ export function RoomMap({
             anchor="bottom"
           >
             <OriginMarker
-              name={origin.label ? `${origin.name} · ${origin.label}` : origin.name}
+              name={
+                origin.label ? `${origin.name} · ${origin.label}` : origin.name
+              }
               color={origin.color}
             />
           </Marker>
@@ -326,6 +332,14 @@ export function RoomMap({
           ) : null
         )}
       </Map>
+
+      {originsToRender.length === 0 ? (
+        <div className="pointer-events-none absolute inset-x-0 top-4 z-10 flex justify-center px-4">
+          <p className="max-w-xs rounded-none border border-border bg-background/95 px-3 py-1.5 text-center text-xs text-muted-foreground shadow-md">
+            Click &ldquo;Set my start point&rdquo; to begin
+          </p>
+        </div>
+      ) : null}
 
       <div className="absolute right-3 bottom-3 z-10 flex flex-col items-end gap-2">
         {originError ? (

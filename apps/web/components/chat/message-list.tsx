@@ -135,7 +135,8 @@ export function MessageList({
         <div className="flex flex-col gap-3 p-3">
           {messages.length === 0 ? (
             <p className="py-8 text-center text-xs text-muted-foreground">
-              No messages yet — say hello.
+              No messages yet — say hello, or mention @agent to find fair spots
+              to meet.
             </p>
           ) : null}
 
