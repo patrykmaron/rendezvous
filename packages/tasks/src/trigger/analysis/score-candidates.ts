@@ -50,6 +50,15 @@ export const scoreCandidatesTask = schemaTask({
     roomRevision,
     expectedParticipants,
   }): Promise<ScoreCandidatesOutput> => {
+    // Trigger.dev retries this run up to maxAttempts (trigger.config.ts) on
+    // transient failure; candidate_scores is plain MergeTree (no dedup on
+    // re-insert), so clear any rows a prior attempt already committed for
+    // this analysisId before inserting, keeping the run idempotent.
+    await chCommand(
+      "DELETE FROM candidate_scores WHERE analysis_id = {analysisId:UUID}",
+      { analysisId }
+    )
+
     // Column list is explicit so order can't drift from migration 3;
     // calculated_at is left to its DEFAULT now().
     await chCommand(

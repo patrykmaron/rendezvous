@@ -1,4 +1,8 @@
-import { chInsert, toChDateTime } from "@workspace/db/clickhouse/query"
+import {
+  chCommand,
+  chInsert,
+  toChDateTime,
+} from "@workspace/db/clickhouse/query"
 import { batch, logger, metadata, schemaTask } from "@trigger.dev/sdk"
 import { z } from "zod"
 
@@ -157,6 +161,14 @@ export const routeMatrixTask = schemaTask({
       }
     })
 
+    // Trigger.dev retries this run up to maxAttempts (trigger.config.ts) on
+    // transient failure; route_observations is plain MergeTree (no dedup on
+    // re-insert), so clear any rows a prior attempt already committed for
+    // this analysisId before inserting, keeping the run idempotent.
+    await chCommand(
+      "DELETE FROM route_observations WHERE analysis_id = {analysisId:UUID}",
+      { analysisId }
+    )
     await chInsert("route_observations", rows)
 
     const okCount = rows.filter((r) => r.route_status === "ok").length
