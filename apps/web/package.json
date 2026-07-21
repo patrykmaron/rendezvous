@@ -12,16 +12,26 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@liveblocks/client": "^3.22.0",
+    "@liveblocks/node": "^3.22.0",
+    "@liveblocks/react": "^3.22.0",
     "@phosphor-icons/react": "^2.1.10",
+    "@trigger.dev/react-hooks": "4.5.5",
+    "@trigger.dev/sdk": "4.5.5",
     "@workspace/db": "workspace:*",
+    "@workspace/tasks": "workspace:*",
     "@workspace/ui": "workspace:*",
+    "h3-js": "^4.5.0",
+    "mapbox-gl": "^3.26.0",
     "next": "16.2.6",
     "next-themes": "^0.4.6",
     "react": "19.2.4",
-    "react-dom": "19.2.4"
+    "react-dom": "19.2.4",
+    "react-map-gl": "^8.1.1"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
+    "@types/mapbox-gl": "^3.5.0",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
