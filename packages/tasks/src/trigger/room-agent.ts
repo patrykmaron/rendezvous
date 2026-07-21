@@ -58,6 +58,14 @@ type AgentState = {
   ranked?: RankedCandidate[]
   venues?: unknown
   venuesByCell?: Map<string, Venue[]>
+  // Set when an analysis tool (generate_candidates / compute_route_matrix /
+  // rank_candidates) returns a semantic "no results" outcome. The system
+  // prompt tells the model to post its own apologetic send_chat and stop
+  // when this happens; semanticFailureNarrated then records whether that
+  // actually happened, so the deterministic finish path can skip
+  // failGracefully's own apology and avoid a double apology.
+  semanticFailure?: "no_candidates" | "no_routes" | "no_scores"
+  semanticFailureNarrated?: boolean
 }
 
 // --- Map overlay (field-for-field mirror of apps/web/lib/types.ts MapOverlay;
@@ -505,16 +513,24 @@ export const roomAgentTask = schemaTask({
       }
     }
 
-    // Terminal failure narrative — never rethrows.
+    // Terminal failure narrative — never rethrows. opts.skipChat lets a
+    // caller suppress the apology when the model already narrated this same
+    // failure via its own send_chat tool call (see semanticFailureNarrated);
+    // markPlanFailed + status:error still always run.
     async function failGracefully(
       chatText: string,
-      reason: string
+      reason: string,
+      opts?: { skipChat?: boolean }
     ): Promise<{ kind: "failed"; reason: string }> {
       setStatus("error", "Something went wrong")
-      try {
-        await postAssistantMessage(chatText)
-      } catch (e) {
-        logger.error("failGracefully: send_chat failed", { error: String(e) })
+      if (!opts?.skipChat) {
+        try {
+          await postAssistantMessage(chatText)
+        } catch (e) {
+          logger.error("failGracefully: send_chat failed", {
+            error: String(e),
+          })
+        }
       }
       try {
         await markPlanFailed(analysisId, roomId, reason)
@@ -604,6 +620,8 @@ export const roomAgentTask = schemaTask({
         return state.generate
       }
       if (res.output.kind === "ok") state.candidates = res.output.candidates
+      else if (res.output.kind === "no_candidates")
+        state.semanticFailure = "no_candidates"
       state.generate = res.output
       return res.output
     }
@@ -622,7 +640,12 @@ export const roomAgentTask = schemaTask({
         origins,
         candidates: state.candidates,
       })
-      state.routeMatrix = res.ok ? res.output : { error: "task_failed" }
+      if (!res.ok) {
+        state.routeMatrix = { error: "task_failed" }
+        return state.routeMatrix
+      }
+      if (res.output.kind === "no_routes") state.semanticFailure = "no_routes"
+      state.routeMatrix = res.output
       return state.routeMatrix
     }
 
@@ -640,6 +663,8 @@ export const roomAgentTask = schemaTask({
         return state.rank
       }
       if (res.output.kind === "ok") state.ranked = res.output.ranked
+      else if (res.output.kind === "no_scores")
+        state.semanticFailure = "no_scores"
       state.rank = res.output
       return res.output
     }
@@ -684,6 +709,10 @@ export const roomAgentTask = schemaTask({
       const text = typeof args.text === "string" ? args.text.trim() : ""
       if (!text) return { error: "empty_text" }
       await postAssistantMessage(text)
+      // A send_chat that lands after an analysis tool already reported a
+      // semantic failure IS the model's narrated apology (per the system
+      // prompt) — record it so the finish path doesn't post a second one.
+      if (state.semanticFailure) state.semanticFailureNarrated = true
       return { sent: true }
     }
 
@@ -802,9 +831,14 @@ export const roomAgentTask = schemaTask({
 
       // 4. Finish — assemble the plan deterministically from state.
       if (!state.ranked || state.ranked.length === 0) {
+        // If the model already narrated this exact failure (semantic
+        // failure → its own apologetic send_chat, per the system prompt),
+        // skip failGracefully's chat so we never double-apologize; it still
+        // marks the plan failed and sets status:error.
         return await failGracefully(
           "Sorry, I couldn't work out fair journeys for everyone right now — please try again shortly.",
-          "no ranked candidates"
+          "no ranked candidates",
+          { skipChat: state.semanticFailureNarrated === true }
         )
       }
 
@@ -814,7 +848,7 @@ export const roomAgentTask = schemaTask({
       // Deterministic final overlay so the map reflects the finalized plan even
       // if the model's show_map calls were imperfect (top-3 area pins + the
       // winner's venue pins, focused/routed to the winner).
-      publishFinalOverlay(result, ctx)
+      publishFinalOverlay(result, ctx, state)
 
       await finalizePlanTask.triggerAndWait({ analysisId, roomId, result })
       setStatus("done", "Plan ready")
@@ -870,39 +904,44 @@ function assemblePlanResult(
   return { candidates }
 }
 
-function publishFinalOverlay(result: PlanResult, ctx: LoadedContext): void {
-  // PlanResult carries no cell centroid, so the winner area is anchored to its
-  // venue centroid and drawn alongside its venue pins.
-  const pins: OverlayPin[] = []
+function publishFinalOverlay(
+  result: PlanResult,
+  ctx: LoadedContext,
+  state: AgentState
+): void {
+  // PlanResult itself carries no cell centroid, but generate_candidates'
+  // output (cached in state) does — anchor the winner area pin and route
+  // endpoints on the true H3 cell centroid rather than a venue centroid
+  // (which skews toward wherever venues cluster and is undefined when the
+  // winner has no venues at all).
   const winner = result.candidates[0]
   if (!winner) return
+  const cell = state.candidates?.find((c) => c.h3 === winner.h3)
+  if (!cell) return
 
-  // Winner area pin: centroid of its venues (PlanResult has no cell centroid).
-  const vs = winner.venues
-  if (vs.length > 0) {
-    const cx = vs.reduce((s, v) => s + v.lat, 0) / vs.length
-    const cy = vs.reduce((s, v) => s + v.lng, 0) / vs.length
-    pins.push({
+  const pins: OverlayPin[] = [
+    {
       id: `candidate-${winner.h3}`,
-      lat: cx,
-      lng: cy,
+      lat: cell.lat,
+      lng: cell.lng,
       kind: "candidate",
       rank: winner.rank,
       label: winner.name,
+    },
+  ]
+  // Venue pins stay at their own venue locations. Published alongside the
+  // candidate pin even when empty — the overlay is still worth publishing
+  // for the area + routes alone.
+  winner.venues.forEach((v, i) => {
+    pins.push({
+      id: `venue-${winner.h3}-${i}`,
+      lat: v.lat,
+      lng: v.lng,
+      kind: "venue",
+      label: v.name,
     })
-    vs.forEach((v, i) => {
-      pins.push({
-        id: `venue-${winner.h3}-${i}`,
-        lat: v.lat,
-        lng: v.lng,
-        kind: "venue",
-        label: v.name,
-      })
-    })
-  }
-  if (pins.length === 0) return
+  })
 
-  const anchor = pins[0]!
   const routes: OverlayRoutes = {
     type: "FeatureCollection",
     features: ctx.origins.map((o) => ({
@@ -911,7 +950,7 @@ function publishFinalOverlay(result: PlanResult, ctx: LoadedContext): void {
         type: "LineString",
         coordinates: [
           [o.lng, o.lat],
-          [anchor.lng, anchor.lat],
+          [cell.lng, cell.lat],
         ],
       },
       properties: { color: o.color },
@@ -920,7 +959,7 @@ function publishFinalOverlay(result: PlanResult, ctx: LoadedContext): void {
   const overlay: MapOverlay = {
     pins,
     routes,
-    focus: { lat: anchor.lat, lng: anchor.lng, zoom: 14 },
+    focus: { lat: cell.lat, lng: cell.lng, zoom: 14 },
   }
   metadata.set("map", overlay)
 }
