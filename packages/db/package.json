@@ -16,6 +16,7 @@
   "exports": {
     "./postgres": "./src/postgres/client.ts",
     "./schema": "./src/postgres/schema.ts",
+    "./revision": "./src/postgres/revision.ts",
     "./clickhouse": "./src/clickhouse/client.ts",
     "./clickhouse/query": "./src/clickhouse/query.ts"
   },

@@ -44,6 +44,8 @@ export const rooms = pgTable("rooms", {
 export const participants = pgTable("participants", {
   id: uuid("id").primaryKey().defaultRandom(),
   displayName: text("display_name").notNull(),
+  // Authoritative user colour (hex from a preset palette).
+  color: text("color").notNull().default("#3B82F6"),
   sessionToken: uuid("session_token").notNull().unique().defaultRandom(),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
@@ -112,6 +114,23 @@ export const messages = pgTable(
       .defaultNow(),
   },
   (t) => [index("messages_room_created_idx").on(t.roomId, t.createdAt)]
+)
+
+export const messageReactions = pgTable(
+  "message_reactions",
+  {
+    messageId: uuid("message_id")
+      .notNull()
+      .references(() => messages.id, { onDelete: "cascade" }),
+    participantId: uuid("participant_id")
+      .notNull()
+      .references(() => participants.id, { onDelete: "cascade" }),
+    emoji: text("emoji").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.messageId, t.participantId, t.emoji] })]
 )
 
 export const participantOrigins = pgTable(
@@ -241,6 +260,9 @@ export const roomEventTypes = [
   "analysis_completed",
   "vote_cast",
   "plan_decided",
+  "reaction_added",
+  "reaction_removed",
+  "color_changed",
 ] as const
 export type RoomEventType = (typeof roomEventTypes)[number]
 
@@ -287,6 +309,8 @@ export type Invitation = typeof invitations.$inferSelect
 export type NewInvitation = typeof invitations.$inferInsert
 export type Message = typeof messages.$inferSelect
 export type NewMessage = typeof messages.$inferInsert
+export type MessageReaction = typeof messageReactions.$inferSelect
+export type NewMessageReaction = typeof messageReactions.$inferInsert
 export type ParticipantOrigin = typeof participantOrigins.$inferSelect
 export type NewParticipantOrigin = typeof participantOrigins.$inferInsert
 export type Constraint = typeof constraints.$inferSelect
