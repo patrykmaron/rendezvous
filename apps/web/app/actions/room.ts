@@ -8,13 +8,22 @@ import { participants, roomMembers, rooms } from "@workspace/db/schema"
 
 import { requireMember } from "@/lib/auth"
 import { PARTICIPANT_COLORS } from "@/lib/colors"
+import { UUID_RE } from "@/lib/validate"
 
 // Server actions are public HTTP endpoints (callable directly, not just from
 // the rendered form) — every input is validated here, never trusted from the
 // client.
 
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+// Thrown from inside a withRoomRevision `write` callback when the in-tx
+// uniqueness check (the race-free authority — see joinRoom/changeColor)
+// finds the colour already claimed. Rolls back the transaction; callers
+// catch it and translate it back to the ordinary typed error result.
+class ColorTakenError extends Error {
+  constructor() {
+    super("That colour is already taken in this room.")
+    this.name = "ColorTakenError"
+  }
+}
 
 const ROOM_NAME_MIN = 1
 const ROOM_NAME_MAX = 80
@@ -117,6 +126,9 @@ export async function joinRoom(
     return { ok: false, error: "Room not found." }
   }
 
+  // Cheap fast-path check only (fails fast for the common case, better UX) —
+  // NOT race-free by itself, since it runs before withRoomRevision opens its
+  // transaction. The authoritative check is inside the write callback below.
   const memberColors = await db
     .select({ color: participants.color })
     .from(roomMembers)
@@ -131,39 +143,63 @@ export async function joinRoom(
   // inserted after the write callback returns.
   const participantId = crypto.randomUUID()
 
-  const { result: participant } = await withRoomRevision({
-    roomId,
-    eventType: "member_joined",
-    actorParticipantId: participantId,
-    payload: { participantId, name, color: paletteEntry.hex },
-    write: async (tx) => {
-      const [inserted] = await tx
-        .insert(participants)
-        .values({
-          id: participantId,
-          displayName: name,
-          color: paletteEntry.hex,
-        })
-        .returning()
-      if (!inserted) {
-        throw new Error("joinRoom: failed to insert participant")
-      }
-      await tx.insert(roomMembers).values({ roomId, participantId })
-      return inserted
-    },
-  })
-  if (!participant) {
-    return { ok: false, error: "Failed to join room." }
-  }
+  try {
+    const { result: participant } = await withRoomRevision({
+      roomId,
+      eventType: "member_joined",
+      actorParticipantId: participantId,
+      payload: { participantId, name, color: paletteEntry.hex },
+      write: async (tx) => {
+        // Authoritative uniqueness check: runs inside the same transaction,
+        // after withRoomRevision's UPDATE ... RETURNING has row-locked
+        // `rooms` for this roomId, which serializes all concurrent
+        // same-room writers — so this SELECT can no longer race with
+        // another writer's insert.
+        const memberColorsInTx = await tx
+          .select({ color: participants.color })
+          .from(roomMembers)
+          .innerJoin(
+            participants,
+            eq(roomMembers.participantId, participants.id)
+          )
+          .where(eq(roomMembers.roomId, roomId))
+        if (memberColorsInTx.some((row) => row.color === paletteEntry.hex)) {
+          throw new ColorTakenError()
+        }
 
-  // TODO(task-4): broadcast member:update
+        const [inserted] = await tx
+          .insert(participants)
+          .values({
+            id: participantId,
+            displayName: name,
+            color: paletteEntry.hex,
+          })
+          .returning()
+        if (!inserted) {
+          throw new Error("joinRoom: failed to insert participant")
+        }
+        await tx.insert(roomMembers).values({ roomId, participantId })
+        return inserted
+      },
+    })
+    if (!participant) {
+      return { ok: false, error: "Failed to join room." }
+    }
 
-  return {
-    ok: true,
-    participantId: participant.id,
-    sessionToken: participant.sessionToken,
-    name: participant.displayName,
-    color: participant.color,
+    // TODO(task-4): broadcast member:update
+
+    return {
+      ok: true,
+      participantId: participant.id,
+      sessionToken: participant.sessionToken,
+      name: participant.displayName,
+      color: participant.color,
+    }
+  } catch (err) {
+    if (err instanceof ColorTakenError) {
+      return { ok: false, error: err.message }
+    }
+    throw err
   }
 }
 
@@ -185,6 +221,8 @@ export async function changeColor(
     return { ok: false, error: "Choose a colour from the palette." }
   }
 
+  // Cheap fast-path check only — see joinRoom for why this is not race-free
+  // by itself and the in-tx check below is the authority.
   const db = getDb()
   const memberColors = await db
     .select({
@@ -202,18 +240,48 @@ export async function changeColor(
     return { ok: false, error: "That colour is already taken in this room." }
   }
 
-  await withRoomRevision({
-    roomId,
-    eventType: "color_changed",
-    actorParticipantId: participant.id,
-    payload: { participantId: participant.id, color: paletteEntry.hex },
-    write: async (tx) => {
-      await tx
-        .update(participants)
-        .set({ color: paletteEntry.hex })
-        .where(eq(participants.id, participant.id))
-    },
-  })
+  try {
+    await withRoomRevision({
+      roomId,
+      eventType: "color_changed",
+      actorParticipantId: participant.id,
+      payload: { participantId: participant.id, color: paletteEntry.hex },
+      write: async (tx) => {
+        // Authoritative uniqueness check — see joinRoom's write callback for
+        // why the row lock from withRoomRevision's revision bump makes this
+        // race-free.
+        const memberColorsInTx = await tx
+          .select({
+            participantId: roomMembers.participantId,
+            color: participants.color,
+          })
+          .from(roomMembers)
+          .innerJoin(
+            participants,
+            eq(roomMembers.participantId, participants.id)
+          )
+          .where(eq(roomMembers.roomId, roomId))
+        const takenByOtherInTx = memberColorsInTx.some(
+          (row) =>
+            row.color === paletteEntry.hex &&
+            row.participantId !== participant.id
+        )
+        if (takenByOtherInTx) {
+          throw new ColorTakenError()
+        }
+
+        await tx
+          .update(participants)
+          .set({ color: paletteEntry.hex })
+          .where(eq(participants.id, participant.id))
+      },
+    })
+  } catch (err) {
+    if (err instanceof ColorTakenError) {
+      return { ok: false, error: err.message }
+    }
+    throw err
+  }
 
   // TODO(task-4): broadcast member:update
 

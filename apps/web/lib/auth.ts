@@ -6,13 +6,12 @@ import {
   type RoomMember,
 } from "@workspace/db/schema"
 
+import { UUID_RE } from "@/lib/validate"
+
 // SERVER-ONLY. Do not import into client components — this touches the
 // database directly. `participants.sessionToken` is the bearer credential
 // (see apps/web/lib/session.ts for how the client stores/sends it); there
 // are no cookies and no passwords in this app.
-
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 export class UnauthorizedError extends Error {
   constructor(message = "Unauthorized") {

@@ -2,24 +2,12 @@
 
 import * as React from "react"
 
+import { unstable_rethrow } from "next/navigation"
+
 import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
 
 import { createRoom } from "@/app/actions/room"
-
-// `redirect()` inside the createRoom server action throws a special
-// framework error tagged with this digest prefix. It must be allowed to
-// propagate (not shown as a validation error) so Next can perform the
-// navigation. See: https://nextjs.org/docs/app/api-reference/functions/redirect
-function isNextRedirectError(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "digest" in error &&
-    typeof (error as { digest?: unknown }).digest === "string" &&
-    (error as { digest: string }).digest.startsWith("NEXT_REDIRECT")
-  )
-}
 
 export function CreateRoomForm() {
   const [name, setName] = React.useState("")
@@ -33,7 +21,12 @@ export function CreateRoomForm() {
       try {
         await createRoom(name)
       } catch (err) {
-        if (isNextRedirectError(err)) throw err
+        // `redirect()` inside the createRoom server action throws a special
+        // framework control-flow error that must be allowed to propagate
+        // (not shown as a validation error) so Next can perform the
+        // navigation. See:
+        // https://nextjs.org/docs/app/api-reference/functions/unstable_rethrow
+        unstable_rethrow(err)
         setError(err instanceof Error ? err.message : "Something went wrong.")
       }
     })
