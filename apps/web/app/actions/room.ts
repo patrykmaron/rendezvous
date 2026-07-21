@@ -8,6 +8,7 @@ import { participants, roomMembers, rooms } from "@workspace/db/schema"
 
 import { requireMember } from "@/lib/auth"
 import { PARTICIPANT_COLORS } from "@/lib/colors"
+import { broadcastRoomEvent } from "@/lib/liveblocks-server"
 import { UUID_RE } from "@/lib/validate"
 
 // Server actions are public HTTP endpoints (callable directly, not just from
@@ -186,7 +187,20 @@ export async function joinRoom(
       return { ok: false, error: "Failed to join room." }
     }
 
-    // TODO(task-4): broadcast member:update
+    // Nudge existing members to refetch the roster (ADR 0012). Fired after the
+    // transaction has committed; a realtime failure must never fail the join,
+    // so it's best-effort.
+    try {
+      await broadcastRoomEvent(roomId, {
+        type: "member:update",
+        kind: "joined",
+        participantId: participant.id,
+        name: participant.displayName,
+        color: participant.color,
+      })
+    } catch (err) {
+      console.warn("joinRoom: broadcast member:update failed", err)
+    }
 
     return {
       ok: true,
@@ -283,7 +297,19 @@ export async function changeColor(
     throw err
   }
 
-  // TODO(task-4): broadcast member:update
+  // Nudge the room to recolour this member's avatar/marker (ADR 0012). Fired
+  // after commit and best-effort — a realtime hiccup must not fail the change.
+  try {
+    await broadcastRoomEvent(roomId, {
+      type: "member:update",
+      kind: "color",
+      participantId: participant.id,
+      name: participant.displayName,
+      color: paletteEntry.hex,
+    })
+  } catch (err) {
+    console.warn("changeColor: broadcast member:update failed", err)
+  }
 
   return { ok: true, color: paletteEntry.hex }
 }
