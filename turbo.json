@@ -8,7 +8,9 @@
     "CLICKHOUSE_URL",
     "CLICKHOUSE_USER",
     "CLICKHOUSE_PASSWORD",
-    "CLICKHOUSE_DATABASE"
+    "CLICKHOUSE_DATABASE",
+    "TFL_PRIMARY_KEY",
+    "TFL_SECONDARY_KEY"
   ],
   "tasks": {
     "build": {

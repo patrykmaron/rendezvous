@@ -169,6 +169,9 @@ importers:
       '@workspace/db':
         specifier: workspace:*
         version: link:../db
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
     devDependencies:
       '@trigger.dev/build':
         specifier: 4.5.4

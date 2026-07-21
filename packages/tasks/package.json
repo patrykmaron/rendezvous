@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@trigger.dev/sdk": "4.5.4",
-    "@workspace/db": "workspace:*"
+    "@workspace/db": "workspace:*",
+    "zod": "4.4.3"
   }
 }
