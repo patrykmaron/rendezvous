@@ -4,10 +4,19 @@ import { and, eq, getDb } from "@workspace/db/postgres"
 import { withRoomRevision } from "@workspace/db/revision"
 import { messageReactions, messages } from "@workspace/db/schema"
 
+import {
+  NeedsOriginsError,
+  postSystemMessage,
+  startAnalysis,
+} from "@/lib/agent-trigger"
 import { requireMember } from "@/lib/auth"
 import { broadcastRoomEvent } from "@/lib/liveblocks-server"
 import { isReactionEmoji } from "@/lib/reactions"
 import type { ChatMessage } from "@/lib/types"
+
+// A message triggers the agent when it @-mentions it (word-boundary, so
+// "@agentic" doesn't match).
+const AGENT_MENTION_RE = /@agent\b/i
 
 // Server actions are public HTTP endpoints (callable directly, not just from
 // the composer) — every input is validated here, never trusted from the
@@ -84,7 +93,34 @@ export async function sendMessage(
     console.warn("sendMessage: broadcast message:new failed", err)
   }
 
-  // TODO(task-9): trigger agent when content mentions @agent
+  // An @agent mention kicks off the same analysis as the header button
+  // (shared startAnalysis helper). This runs AFTER the message is durably
+  // committed + broadcast, and is entirely best-effort: a trigger failure
+  // (e.g. missing TRIGGER_SECRET_KEY) must never fail the user's message
+  // send. If the origins guard fails, we post an inline system message
+  // prompting for start points instead of silently doing nothing.
+  if (AGENT_MENTION_RE.test(trimmed)) {
+    try {
+      await startAnalysis({
+        roomId,
+        participantId: participant.id,
+        triggerMessageId: inserted.id,
+      })
+    } catch (err) {
+      if (err instanceof NeedsOriginsError) {
+        try {
+          await postSystemMessage(
+            roomId,
+            "Set at least two start points on the map first."
+          )
+        } catch (postErr) {
+          console.warn("sendMessage: postSystemMessage failed", postErr)
+        }
+      } else {
+        console.warn("sendMessage: startAnalysis (@agent) failed", err)
+      }
+    }
+  }
 
   return message
 }

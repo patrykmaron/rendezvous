@@ -40,4 +40,8 @@ const Toaster = ({ ...props }: ToasterProps) => {
   )
 }
 
+// Re-exported so apps can fire toasts without adding `sonner` as a direct
+// dependency (it ships transitively with this package).
+export { toast } from "sonner"
+
 export { Toaster }

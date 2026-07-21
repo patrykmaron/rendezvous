@@ -27,13 +27,16 @@ import {
   DropdownMenuTrigger,
 } from "@workspace/ui/components/dropdown-menu"
 import { Input } from "@workspace/ui/components/input"
-import { Toaster } from "@workspace/ui/components/sonner"
+import { Toaster, toast } from "@workspace/ui/components/sonner"
 import { cn } from "@workspace/ui/lib/utils"
 
 import { cellToLatLng } from "h3-js"
 
+import { askAgent } from "@/app/actions/agent"
 import { changeColor, joinRoom } from "@/app/actions/room"
 import { ChatPanel } from "@/components/chat/chat-panel"
+import { useAgentToasts } from "@/hooks/use-agent-toasts"
+import { isFinalStatus, useRoomAgent } from "@/hooks/use-room-agent"
 import { PARTICIPANT_COLORS } from "@/lib/colors"
 import {
   getRoomSession,
@@ -274,6 +277,50 @@ function RoomView({
     focus: null,
   })
 
+  // Live agent state (Trigger.dev realtime): active/last run, status, streamed
+  // text, map overlay, timeline, routing progress. Drives the map overlay, the
+  // chat activity row, and the toasts below. Read-only — starting a run goes
+  // through the askAgent server action.
+  const agent = useRoomAgent(roomId, session.sessionToken)
+  useAgentToasts({
+    activeRun: agent.activeRun,
+    lastRun: agent.lastRun,
+    status: agent.status,
+  })
+  // The newest run's id once it has reached a final status — handed to the chat
+  // panel to trigger an authoritative plan refetch on completion.
+  const completedRunId =
+    agent.lastRun && isFinalStatus(agent.lastRun.status)
+      ? agent.lastRun.id
+      : undefined
+
+  // Fold the agent's map overlay into the shared overlay state whenever it
+  // changes (its identity is content-stable — see useRoomAgent). A manual
+  // focusCandidate click can override it in between; the next agent update wins
+  // again, which is correct (fresh results supersede a manual focus).
+  React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (agent.overlay) setOverlay(agent.overlay)
+  }, [agent.overlay])
+
+  // Kick off an analysis from the header button. Disabled below while < 2
+  // origins or a run is active; a needs_origins result still guards the race
+  // where origins changed between render and click.
+  const [isAsking, startAskTransition] = React.useTransition()
+  const handleAskAgent = React.useCallback(() => {
+    startAskTransition(async () => {
+      try {
+        const result = await askAgent(session.sessionToken, roomId)
+        if (!result.ok) {
+          toast.error("Set at least two start points on the map first.")
+        }
+      } catch (err) {
+        console.error("askAgent failed", err)
+        toast.error("Couldn't start the agent — please try again.")
+      }
+    })
+  }, [session.sessionToken, roomId])
+
   // Paint a chosen plan candidate onto the map and fly to it: a pin for the
   // area (its H3 cell centre) plus a pin per venue. Called from the chat
   // results card. Guards against a malformed H3 by falling back to the venue
@@ -369,7 +416,17 @@ function RoomView({
 
   // origin:update is a nudge (ADR 0012): apply the payload with name/colour
   // from the members map, or refetch authoritatively if the member is unknown.
+  // member:update surfaces a small info toast (skipping my own colour echo).
   useEventListener(({ event }) => {
+    if (event.type === "member:update") {
+      if (event.participantId === session.participantId) return
+      toast.info(
+        event.kind === "joined"
+          ? `${event.name} joined`
+          : `${event.name} changed colour`
+      )
+      return
+    }
     if (event.type !== "origin:update") return
     const member = membersRef.current.get(event.participantId)
     if (!member) {
@@ -485,10 +542,34 @@ function RoomView({
             ))}
           </AvatarGroup>
 
-          <Button variant="outline" size="sm" disabled>
-            <SparkleIcon />
-            Find fair spots
-          </Button>
+          {(() => {
+            const disabledReason = agent.isActive
+              ? "The agent is already working…"
+              : origins.length < 2
+                ? "Set at least two start points on the map first"
+                : null
+            const disabled = disabledReason !== null || isAsking
+            return (
+              // Wrapper span carries the native tooltip: a disabled button
+              // doesn't emit hover events, so `pointer-events-none` lets the
+              // hover fall through to the span's `title`.
+              <span
+                title={disabledReason ?? undefined}
+                className="inline-flex"
+              >
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={disabled}
+                  onClick={handleAskAgent}
+                  className={cn(disabled && "pointer-events-none")}
+                >
+                  <SparkleIcon />
+                  Find fair spots
+                </Button>
+              </span>
+            )
+          })()}
         </div>
       </header>
 
@@ -513,6 +594,14 @@ function RoomView({
           <ChatPanel
             roomId={roomId}
             session={session}
+            agent={{
+              status: agent.status,
+              streamText: agent.streamText,
+              progress: agent.progress,
+              timeline: agent.timeline,
+              isActive: agent.isActive,
+            }}
+            completedRunId={completedRunId}
             onFocusCandidate={focusCandidate}
           />
         </aside>

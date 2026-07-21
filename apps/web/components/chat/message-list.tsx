@@ -6,8 +6,10 @@ import { Marker, MarkerContent } from "@workspace/ui/components/marker"
 import { MessageGroup } from "@workspace/ui/components/message"
 import { ScrollArea } from "@workspace/ui/components/scroll-area"
 
+import type { ChatAgentActivity } from "@/hooks/use-room-agent"
 import type { ChatMessage, PlanCandidate, PlanSnapshotView } from "@/lib/types"
 
+import { AgentActivity } from "./agent-activity"
 import { MessageItem } from "./message-item"
 import { PlanCard } from "./plan-card"
 
@@ -42,12 +44,14 @@ export function MessageList({
   messages,
   myParticipantId,
   plan,
+  agent,
   onFocus,
   onToggleReaction,
 }: {
   messages: ChatMessage[]
   myParticipantId: string
   plan: PlanSnapshotView | null
+  agent: ChatAgentActivity
   onFocus: (candidate: PlanCandidate) => void
   onToggleReaction: (messageId: string, emoji: string) => void
 }) {
@@ -122,7 +126,8 @@ export function MessageList({
     )
     if (!viewport) return
     viewport.scrollTop = viewport.scrollHeight
-  }, [messages, plan])
+    // Also follow the agent's live status/stream while it's working.
+  }, [messages, plan, agent.isActive, agent.streamText, agent.status?.label])
 
   return (
     <div ref={containerRef} className="min-h-0 flex-1">
@@ -156,6 +161,15 @@ export function MessageList({
           )}
 
           {plan ? <PlanCard plan={plan} onFocus={onFocus} /> : null}
+
+          {agent.isActive ? (
+            <AgentActivity
+              status={agent.status}
+              streamText={agent.streamText}
+              progress={agent.progress}
+              timeline={agent.timeline}
+            />
+          ) : null}
         </div>
       </ScrollArea>
     </div>

@@ -4,7 +4,9 @@
   "scripts": {
     "typecheck": "tsc --noEmit"
   },
-  "exports": {},
+  "exports": {
+    "./trigger/room-agent.types": "./src/trigger/room-agent.types.ts"
+  },
   "devDependencies": {
     "@trigger.dev/build": "4.5.5",
     "@types/node": "^20",

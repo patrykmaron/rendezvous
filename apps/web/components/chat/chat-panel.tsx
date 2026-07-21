@@ -7,6 +7,7 @@ import { useEventListener } from "@liveblocks/react/suspense"
 import { TooltipProvider } from "@workspace/ui/components/tooltip"
 
 import { sendMessage, toggleReaction } from "@/app/actions/chat"
+import type { ChatAgentActivity } from "@/hooks/use-room-agent"
 import type { RoomSession } from "@/lib/session"
 import type {
   ChatMessage,
@@ -85,10 +86,17 @@ function applyReaction(
 export function ChatPanel({
   roomId,
   session,
+  agent,
+  completedRunId,
   onFocusCandidate,
 }: {
   roomId: string
   session: RoomSession
+  agent: ChatAgentActivity
+  // Run id of the newest run once it reaches a final status; a change triggers
+  // an authoritative plan refetch (belt-and-braces with the `plan:updated`
+  // nudge below — deduped so a given completion refetches at most once).
+  completedRunId: string | undefined
   onFocusCandidate: (candidate: PlanCandidate) => void
 }) {
   const [messages, setMessages] = React.useState<ChatMessage[]>([])
@@ -157,6 +165,16 @@ export function ChatPanel({
     void loadHistory()
     void loadPlan()
   }, [loadMembers, loadHistory, loadPlan])
+
+  // When a run finishes, refetch the plan (the finalize task also fires a
+  // `plan:updated` nudge handled below; both call loadPlan, but this ref dedupes
+  // a given completed run so it can't double-fetch on repeated renders).
+  const refetchedRunRef = React.useRef<string | null>(null)
+  React.useEffect(() => {
+    if (!completedRunId || refetchedRunRef.current === completedRunId) return
+    refetchedRunRef.current = completedRunId
+    void loadPlan()
+  }, [completedRunId, loadPlan])
 
   // Append a durable message, replacing a matching optimistic placeholder and
   // deduping by id (the sender sees both the action's return and its own
@@ -266,6 +284,7 @@ export function ChatPanel({
           messages={messages}
           myParticipantId={session.participantId}
           plan={plan}
+          agent={agent}
           onFocus={onFocusCandidate}
           onToggleReaction={handleToggleReaction}
         />
