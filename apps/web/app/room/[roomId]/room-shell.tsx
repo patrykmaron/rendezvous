@@ -30,14 +30,17 @@ import { Input } from "@workspace/ui/components/input"
 import { Toaster } from "@workspace/ui/components/sonner"
 import { cn } from "@workspace/ui/lib/utils"
 
+import { cellToLatLng } from "h3-js"
+
 import { changeColor, joinRoom } from "@/app/actions/room"
+import { ChatPanel } from "@/components/chat/chat-panel"
 import { PARTICIPANT_COLORS } from "@/lib/colors"
 import {
   getRoomSession,
   setRoomSession,
   type RoomSession,
 } from "@/lib/session"
-import type { MapOverlay, OriginPoint } from "@/lib/types"
+import type { MapOverlay, OriginPoint, PlanCandidate } from "@/lib/types"
 
 // mapbox-gl touches `window`/`document` at module scope, so the map is loaded
 // client-only (never server-rendered). ssr:false is valid here because this
@@ -262,14 +265,62 @@ function RoomView({
   // Map state lives here (not in the map) so the map stays mounted across chat
   // interactions and Task 9 can feed the overlay without restructuring.
   const [origins, setOrigins] = React.useState<OriginPoint[]>([])
-  // Overlay = agent-produced pins/routes/focus. State + setter are kept ready
-  // so Task 9 only adds a producing hook that calls setOverlay.
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  // Overlay = agent-produced pins/routes/focus. Task 9 will additionally feed
+  // this from analysis metadata; for now the chat results card drives it via
+  // focusCandidate below (clicking a candidate flies the map to it).
   const [overlay, setOverlay] = React.useState<MapOverlay>({
     pins: [],
     routes: null,
     focus: null,
   })
+
+  // Paint a chosen plan candidate onto the map and fly to it: a pin for the
+  // area (its H3 cell centre) plus a pin per venue. Called from the chat
+  // results card. Guards against a malformed H3 by falling back to the venue
+  // centroid, and no-ops if neither yields a usable centre.
+  const focusCandidate = React.useCallback((candidate: PlanCandidate) => {
+    const venuePoints = candidate.venues.filter(
+      (v) => Number.isFinite(v.lat) && Number.isFinite(v.lng)
+    )
+
+    let center: { lat: number; lng: number } | null = null
+    try {
+      const [lat, lng] = cellToLatLng(candidate.h3)
+      if (Number.isFinite(lat) && Number.isFinite(lng)) center = { lat, lng }
+    } catch {
+      // Malformed H3 cell — fall through to the venue centroid.
+    }
+    if (!center && venuePoints.length > 0) {
+      const sum = venuePoints.reduce(
+        (acc, v) => ({ lat: acc.lat + v.lat, lng: acc.lng + v.lng }),
+        { lat: 0, lng: 0 }
+      )
+      center = {
+        lat: sum.lat / venuePoints.length,
+        lng: sum.lng / venuePoints.length,
+      }
+    }
+    if (!center) return
+
+    const pins: MapOverlay["pins"] = [
+      {
+        id: `candidate-${candidate.h3}`,
+        lat: center.lat,
+        lng: center.lng,
+        kind: "candidate",
+        rank: candidate.rank,
+        label: candidate.name,
+      },
+      ...venuePoints.map((v, i) => ({
+        id: `venue-${candidate.h3}-${i}`,
+        lat: v.lat,
+        lng: v.lng,
+        kind: "venue" as const,
+        label: v.name,
+      })),
+    ]
+    setOverlay({ pins, routes: null, focus: { ...center, zoom: 14 } })
+  }, [])
 
   // participantId → {name, color}, used to enrich origin:update nudges (which
   // carry only coordinates) without a round-trip. Refetched if an unknown
@@ -459,9 +510,11 @@ function RoomView({
             <ChatCircleDotsIcon className="size-4" />
             <span className="text-xs font-medium">Chat</span>
           </div>
-          <div className="flex flex-1 items-center justify-center p-4 text-xs text-muted-foreground">
-            Chat coming in Task 6
-          </div>
+          <ChatPanel
+            roomId={roomId}
+            session={session}
+            onFocusCandidate={focusCandidate}
+          />
         </aside>
       </main>
 

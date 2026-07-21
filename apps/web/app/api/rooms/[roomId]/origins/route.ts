@@ -1,23 +1,15 @@
 import { eq, getDb } from "@workspace/db/postgres"
 import { participantOrigins, participants } from "@workspace/db/schema"
 
-import { requireMember, UnauthorizedError } from "@/lib/auth"
+import { bearerToken, requireMember, UnauthorizedError } from "@/lib/auth"
 import type { OriginPoint } from "@/lib/types"
 
 // Authenticated origins list for a room. Unlike the public members list, this
 // exposes each member's precise start coordinates, so the caller must prove
-// membership: the bearer sessionToken comes via `Authorization: Bearer <token>`
-// or `?token=<token>` (EventSource/img-style callers can't set headers). Auth
-// failures return 401 without distinguishing which check failed (see
-// requireMember).
-
-function extractToken(request: Request): string {
-  const header = request.headers.get("authorization")
-  if (header?.startsWith("Bearer ")) {
-    return header.slice("Bearer ".length).trim()
-  }
-  return new URL(request.url).searchParams.get("token") ?? ""
-}
+// membership: the bearer sessionToken comes ONLY via `Authorization: Bearer
+// <token>` — never a query-string fallback, so the credential can't leak into
+// URLs/logs. Auth failures return 401 without distinguishing which check
+// failed (see requireMember).
 
 export async function GET(
   request: Request,
@@ -26,7 +18,7 @@ export async function GET(
   const { roomId } = await ctx.params
 
   try {
-    await requireMember(extractToken(request), roomId)
+    await requireMember(bearerToken(request), roomId)
   } catch (err) {
     if (err instanceof UnauthorizedError) {
       return new Response("Unauthorized", { status: 401 })

@@ -21,6 +21,20 @@ export class UnauthorizedError extends Error {
 }
 
 /**
+ * Pulls the participant's bearer `sessionToken` out of an `Authorization:
+ * Bearer <token>` header. There is deliberately no query-string fallback — a
+ * bearer credential must never travel in a URL (where it lands in logs and
+ * referrers). Returns "" when absent, which `requireMember` rejects.
+ */
+export function bearerToken(request: Request): string {
+  const header = request.headers.get("authorization")
+  if (header?.startsWith("Bearer ")) {
+    return header.slice("Bearer ".length).trim()
+  }
+  return ""
+}
+
+/**
  * Resolves a bearer `sessionToken` to a participant and confirms they are a
  * member of `roomId`. Every server action / route handler that acts on
  * behalf of a participant must call this first. Throws `UnauthorizedError`

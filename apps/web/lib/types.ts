@@ -2,6 +2,17 @@
 // types) so they can travel over Liveblocks broadcasts (see
 // apps/web/liveblocks.config.ts) and API/JSON boundaries alike.
 
+// One emoji's worth of reactions on a message, pre-aggregated for rendering:
+// how many people reacted, whether I'm one of them, and their display names
+// (for the chip tooltip). Assembled server-side by the messages API and
+// patched live by `reaction:update` nudges.
+export type MessageReactionSummary = {
+  emoji: string
+  count: number
+  reactedByMe: boolean
+  names: string[]
+}
+
 export type ChatMessage = {
   id: string
   roomId: string
@@ -11,7 +22,10 @@ export type ChatMessage = {
   content: string
   // ISO-8601 string (Dates don't survive JSON / the realtime wire).
   createdAt: string
+  // assistant/system rows resolve to the "Rendezvous" persona name/colour.
   author?: { name: string; color: string }
+  // Aggregated reactions (empty for a brand-new message).
+  reactions: MessageReactionSummary[]
 }
 
 export type ReactionUpdate = {
@@ -50,4 +64,37 @@ export type MapOverlay = {
   }>
   routes: GeoJSON.FeatureCollection | null
   focus?: { lat: number; lng: number; zoom?: number } | null
+}
+
+// The agent's proposed meeting areas, denormalised into plan_snapshots.result
+// for instant render (see planSnapshots.result in the DB schema). Produced by
+// the analysis in Task 9; consumed read-only by the chat's results card.
+export type PlanCandidate = {
+  // H3 cell (resolution 8) identifying the area — also the vote key.
+  h3: string
+  name: string
+  rank: number
+  overallScore: number
+  fairnessScore: number
+  avgMinutes: number
+  maxMinutes: number
+  perParticipant: Array<{
+    participantId: string
+    name: string
+    color: string
+    minutes: number
+  }>
+  venues: Array<{ name: string; lat: number; lng: number; category?: string }>
+}
+
+export type PlanResult = {
+  candidates: PlanCandidate[]
+}
+
+// The latest plan snapshot for a room, as served by GET /api/rooms/[id]/plan.
+export type PlanSnapshotView = {
+  status: "pending" | "running" | "complete" | "failed"
+  analysisId: string
+  result: PlanResult | null
+  createdAt: string
 }
