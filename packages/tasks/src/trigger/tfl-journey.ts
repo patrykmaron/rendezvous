@@ -1,4 +1,4 @@
-import { logger, schemaTask } from "@trigger.dev/sdk"
+import { logger, metadata, schemaTask } from "@trigger.dev/sdk"
 
 import { tflFetch, tflHttpError, tflJson } from "../tfl/client"
 import { mapDisambiguation, mapJourneyResponse, mapMode } from "../tfl/mappers"
@@ -9,6 +9,7 @@ import {
   type PlanJourneyOutput,
   type TransportMode,
 } from "../tfl/schemas"
+import { tflQueue } from "./queues"
 
 /**
  * Journey Planner search between two locations. Child task for agent
@@ -18,6 +19,7 @@ import {
 export const tflJourneyPlanTask = schemaTask({
   id: "tfl-journey-plan",
   schema: journeyPlanPayload,
+  queue: tflQueue,
   maxDuration: 120,
   run: async (payload): Promise<PlanJourneyOutput> => {
     const {
@@ -50,6 +52,9 @@ export const tflJourneyPlanTask = schemaTask({
 
     if (res.status === 200) {
       const journeys = mapJourneyResponse(await tflJson(res))
+      // Progress counter on the root run (route-matrix parent); a no-op when
+      // this task runs standalone.
+      metadata.root.increment("routesDone", 1)
       logger.info("journey plan resolved", {
         from,
         to,
@@ -75,6 +80,7 @@ export const tflJourneyPlanTask = schemaTask({
       } catch {
         // Not ApiError JSON — keep the raw snippet.
       }
+      metadata.root.increment("routesFailed", 1)
       logger.warn("journey planner found no route", { from, to, message })
       return { kind: "no_journeys", message }
     }

@@ -9,11 +9,13 @@ import {
   type BikePointSearchHit,
   type BikePointStatus,
 } from "../tfl/schemas"
+import { tflQueue } from "./queues"
 
 /** All ~800 Santander dock stations with live occupancy. */
 export const tflBikePointsListTask = schemaTask({
   id: "tfl-bikepoints-list",
   schema: bikePointsListPayload,
+  queue: tflQueue,
   maxDuration: 120,
   run: async (): Promise<{ count: number; bikePoints: BikePointStatus[] }> => {
     const res = await tflFetch("/BikePoint")
@@ -30,6 +32,7 @@ export const tflBikePointsListTask = schemaTask({
 export const tflBikePointGetTask = schemaTask({
   id: "tfl-bikepoint-get",
   schema: bikePointGetPayload,
+  queue: tflQueue,
   maxDuration: 60,
   run: async ({
     id,
@@ -57,6 +60,7 @@ export const tflBikePointGetTask = schemaTask({
 export const tflBikePointsSearchTask = schemaTask({
   id: "tfl-bikepoints-search",
   schema: bikePointSearchPayload,
+  queue: tflQueue,
   maxDuration: 60,
   run: async ({
     query,
