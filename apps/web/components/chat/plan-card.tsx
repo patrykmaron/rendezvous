@@ -1,5 +1,7 @@
 "use client"
 
+import * as React from "react"
+
 import { ArrowsClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowsClockwise"
 import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle"
 import { HeartIcon } from "@phosphor-icons/react/dist/csr/Heart"
@@ -15,6 +17,8 @@ import type {
   RoomDecision,
   VoteTally,
 } from "@/lib/types"
+
+import { JourneyLine } from "./journey-line"
 
 function mins(value: number): string {
   return `${Math.round(value)}m`
@@ -79,6 +83,7 @@ function VoteHeart({
 
 function CandidateRow({
   candidate,
+  eventAt,
   voteCount,
   mine,
   myColor,
@@ -91,6 +96,8 @@ function CandidateRow({
   onDecide,
 }: {
   candidate: PlanCandidate
+  // Room event time — gates the journey rows' "leave by" chip (G1 §6).
+  eventAt: string | null
   voteCount: number
   mine: boolean
   myColor: string
@@ -106,6 +113,11 @@ function CandidateRow({
 }) {
   const venues = candidate.venues.slice(0, 3)
   const showVenues = venues.length > 0
+  // When any participant has a captured journey, render rich expandable rows
+  // (outside the focus button — their toggles are their own buttons); otherwise
+  // keep the compact inline chips inside the button, unchanged from before.
+  const hasAnyJourney = candidate.perParticipant.some((p) => p.journey)
+  const [expandedPid, setExpandedPid] = React.useState<string | null>(null)
   return (
     // The venue chips and vote/lock controls below are their own <button>s —
     // nesting them inside the row's focus button would be invalid HTML, so this
@@ -126,22 +138,42 @@ function CandidateRow({
           </span>
         </div>
 
-        <div className="flex flex-wrap gap-x-2 gap-y-1 pl-7">
-          {candidate.perParticipant.map((p) => (
-            <span
-              key={p.participantId}
-              className="inline-flex items-center gap-1 text-[11px] text-muted-foreground"
-              title={`${p.name}: ${mins(p.minutes)}`}
-            >
+        {!hasAnyJourney ? (
+          <div className="flex flex-wrap gap-x-2 gap-y-1 pl-7">
+            {candidate.perParticipant.map((p) => (
               <span
-                className="size-2 shrink-0 rounded-full"
-                style={{ backgroundColor: p.color }}
-              />
-              <span className="tabular-nums">{mins(p.minutes)}</span>
-            </span>
+                key={p.participantId}
+                className="inline-flex items-center gap-1 text-[11px] text-muted-foreground"
+                title={`${p.name}: ${mins(p.minutes)}`}
+              >
+                <span
+                  className="size-2 shrink-0 rounded-full"
+                  style={{ backgroundColor: p.color }}
+                />
+                <span className="tabular-nums">{mins(p.minutes)}</span>
+              </span>
+            ))}
+          </div>
+        ) : null}
+      </button>
+
+      {hasAnyJourney ? (
+        <div className="flex flex-col gap-0.5 px-3 pb-1 pl-7">
+          {candidate.perParticipant.map((p) => (
+            <JourneyLine
+              key={p.participantId}
+              participant={p}
+              eventAt={eventAt}
+              expanded={expandedPid === p.participantId}
+              onToggle={() =>
+                setExpandedPid((cur) =>
+                  cur === p.participantId ? null : p.participantId
+                )
+              }
+            />
           ))}
         </div>
-      </button>
+      ) : null}
 
       {showVenues ? (
         <div className="flex flex-wrap items-center gap-1 px-3 pb-1.5 pl-7">
@@ -212,6 +244,7 @@ function CandidateRow({
  */
 export function PlanCard({
   plan,
+  eventAt,
   replanning,
   updateFailed,
   updatingLabel,
@@ -226,6 +259,7 @@ export function PlanCard({
   onDecide,
 }: {
   plan: PlanSnapshotView
+  eventAt: string | null
   replanning: boolean
   updateFailed: boolean
   updatingLabel: string
@@ -301,6 +335,7 @@ export function PlanCard({
           <CandidateRow
             key={candidate.h3}
             candidate={candidate}
+            eventAt={eventAt}
             voteCount={voteCountByH3.get(candidate.h3) ?? 0}
             mine={myVoteSet.has(candidate.h3)}
             myColor={myColor}

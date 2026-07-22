@@ -1100,6 +1100,7 @@ function RoomView({
               isActive: agent.isActive,
             }}
             plan={planState.data?.plan ?? null}
+            eventAt={eventAt}
             replanning={replanningLive}
             updateFailed={planState.updateFailed}
             updatingLabel={updatingLabel}

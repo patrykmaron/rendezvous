@@ -50,6 +50,7 @@ export function MessageList({
   messages,
   myParticipantId,
   plan,
+  eventAt,
   replanning,
   updateFailed,
   updatingLabel,
@@ -68,6 +69,7 @@ export function MessageList({
   messages: ChatMessage[]
   myParticipantId: string
   plan: PlanSnapshotView | null
+  eventAt: string | null
   replanning: boolean
   updateFailed: boolean
   updatingLabel: string
@@ -192,6 +194,7 @@ export function MessageList({
           {plan ? (
             <PlanCard
               plan={plan}
+              eventAt={eventAt}
               replanning={replanning}
               updateFailed={updateFailed}
               updatingLabel={updatingLabel}

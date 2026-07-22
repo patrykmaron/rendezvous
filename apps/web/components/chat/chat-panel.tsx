@@ -93,6 +93,7 @@ export function ChatPanel({
   session,
   agent,
   plan,
+  eventAt,
   replanning,
   updateFailed,
   updatingLabel,
@@ -111,6 +112,7 @@ export function ChatPanel({
   agent: ChatAgentActivity
   // Plan slice from RoomView's usePlan (see hooks/use-plan.ts).
   plan: PlanSnapshotView | null
+  eventAt: string | null
   replanning: boolean
   updateFailed: boolean
   updatingLabel: string
@@ -284,6 +286,7 @@ export function ChatPanel({
           messages={messages}
           myParticipantId={session.participantId}
           plan={plan}
+          eventAt={eventAt}
           replanning={replanning}
           updateFailed={updateFailed}
           updatingLabel={updatingLabel}
