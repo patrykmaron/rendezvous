@@ -51,6 +51,13 @@ export const journeyPlanPayload = z.object({
   maxWalkingMinutes: z.number().int().positive().optional(),
   /** One call returns public transport + bus + cycle-hire + cycle + walking. */
   useMultiModalCall: z.boolean().optional(),
+  /**
+   * Capture downsampled leg geometry (pathPoints) in the mapped output. Off by
+   * default: the route-matrix fan-out (~120 calls) must stay compact. Purely
+   * behavioural — the tfl-journey task destructures it OUT before spreading the
+   * remaining payload into the TfL query string (it is not a TfL param).
+   */
+  includeGeometry: z.boolean().optional(),
 })
 
 export const journeyModesPayload = z.object({})
@@ -104,7 +111,33 @@ export const rawItineraryResult = z.object({
               arrivalPoint: rawPoint.optional(),
               /** Metres. */
               distance: z.number().optional(),
+              /** Minutes. */
+              duration: z.number().optional(),
               isDisrupted: z.boolean().optional(),
+              /**
+               * `lineString` is a STRING containing JSON — "[[lat,lon],...]",
+               * lat-first (verified live 2026-07-22 against departurePoint).
+               * Decoded + downsampled by the mapper only when includeGeometry.
+               */
+              path: z.object({ lineString: z.string().optional() }).optional(),
+              /**
+               * Line/route identity. `routeOptions[0].name` carries "Victoria"
+               * / "15" for tube/bus legs and "" for walking legs;
+               * `lineIdentifier.name` is the fallback.
+               */
+              routeOptions: z
+                .array(
+                  z.object({
+                    name: z.string().nullable().optional(),
+                    lineIdentifier: z
+                      .object({
+                        id: z.string().optional(),
+                        name: z.string().optional(),
+                      })
+                      .optional(),
+                  })
+                )
+                .optional(),
             })
           )
           .optional(),
@@ -181,13 +214,21 @@ export type LatLon = { lat: number; lon: number }
 
 export type JourneyLeg = {
   mode: string
+  /** Line/route name, e.g. "Victoria", "15", "Elizabeth line". Omitted on walking legs. */
+  lineName?: string
   instruction: string
   departureTime: string
   arrivalTime: string
+  durationMinutes?: number
   departurePoint: LatLon
   arrivalPoint: LatLon
   distanceMetres?: number
   isDisrupted: boolean
+  /**
+   * [lat, lon] pairs, uniform-stride downsampled to <= MAX_PATH_POINTS.
+   * Present only when the journey was requested with includeGeometry.
+   */
+  pathPoints?: [number, number][]
 }
 
 export type JourneyOption = {

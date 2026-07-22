@@ -29,6 +29,9 @@ export const tflJourneyPlanTask = schemaTask({
       nationalSearch,
       maxWalkingMinutes,
       useMultiModalCall,
+      // Behavioural flag, NOT a TfL query param — must be destructured out here
+      // so it never leaks into `...stringParams` and onto the request URL.
+      includeGeometry,
       ...stringParams
     } = payload
 
@@ -51,7 +54,9 @@ export const tflJourneyPlanTask = schemaTask({
     )
 
     if (res.status === 200) {
-      const journeys = mapJourneyResponse(await tflJson(res))
+      const journeys = mapJourneyResponse(await tflJson(res), {
+        includeGeometry,
+      })
       // Progress counter on the root run (route-matrix parent); a no-op when
       // this task runs standalone.
       metadata.root.increment("routesDone", 1)

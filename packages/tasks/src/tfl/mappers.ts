@@ -16,29 +16,108 @@ import {
   rawPlace,
 } from "./schemas"
 
-export function mapJourneyResponse(body: unknown): JourneyOption[] {
+/** Max geometry vertices kept per leg after downsampling (~1 point/8s). */
+const MAX_PATH_POINTS = 50
+
+/** Pick the human line/route name, treating "" as absent (walking legs). */
+function pickLineName(
+  routeOptions:
+    | Array<{ name?: string | null; lineIdentifier?: { name?: string } }>
+    | undefined
+): string | undefined {
+  const ro = routeOptions?.[0]
+  const name = ro?.name?.trim()
+  if (name) return name
+  const alt = ro?.lineIdentifier?.name?.trim()
+  return alt ? alt : undefined
+}
+
+/**
+ * Decode a TfL `path.lineString` (a JSON string of [lat, lon] pairs) into a
+ * downsampled [lat, lon][]. Malformed JSON or non-2-number entries are dropped;
+ * returns undefined when fewer than 2 usable points remain (a line needs two).
+ */
+function decodePathPoints(
+  lineString: string | undefined
+): [number, number][] | undefined {
+  if (!lineString) return undefined
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(lineString)
+  } catch {
+    return undefined
+  }
+  if (!Array.isArray(parsed)) return undefined
+  const points: [number, number][] = []
+  for (const entry of parsed) {
+    if (
+      Array.isArray(entry) &&
+      entry.length === 2 &&
+      typeof entry[0] === "number" &&
+      typeof entry[1] === "number"
+    ) {
+      points.push([entry[0], entry[1]])
+    }
+  }
+  if (points.length < 2) return undefined
+  return downsample(points)
+}
+
+/** Uniform-stride downsample to <= MAX_PATH_POINTS, always keeping first+last,
+ *  rounding to 5 dp (~1m) to shave JSON bytes. */
+function downsample(points: [number, number][]): [number, number][] {
+  const round5 = (n: number): number => Math.round(n * 1e5) / 1e5
+  const rounded = points.map(
+    ([a, b]) => [round5(a), round5(b)] as [number, number]
+  )
+  if (rounded.length <= MAX_PATH_POINTS) return rounded
+  const stride = (rounded.length - 1) / (MAX_PATH_POINTS - 1)
+  const out: [number, number][] = []
+  for (let i = 0; i < MAX_PATH_POINTS; i++) {
+    out.push(rounded[Math.round(i * stride)]!)
+  }
+  out[out.length - 1] = rounded[rounded.length - 1]! // guarantee the last point
+  return out
+}
+
+export function mapJourneyResponse(
+  body: unknown,
+  opts?: { includeGeometry?: boolean }
+): JourneyOption[] {
   const raw = rawItineraryResult.parse(body)
   return (raw.journeys ?? []).map((journey) => ({
     startDateTime: journey.startDateTime ?? "",
     arrivalDateTime: journey.arrivalDateTime ?? "",
     durationMinutes: journey.duration ?? 0,
     fareTotalPence: journey.fare?.totalCost,
-    legs: (journey.legs ?? []).map((leg) => ({
-      mode: leg.mode?.id ?? leg.mode?.name ?? "unknown",
-      instruction: leg.instruction?.summary ?? leg.instruction?.detailed ?? "",
-      departureTime: leg.departureTime ?? "",
-      arrivalTime: leg.arrivalTime ?? "",
-      departurePoint: {
-        lat: leg.departurePoint?.lat ?? 0,
-        lon: leg.departurePoint?.lon ?? 0,
-      },
-      arrivalPoint: {
-        lat: leg.arrivalPoint?.lat ?? 0,
-        lon: leg.arrivalPoint?.lon ?? 0,
-      },
-      distanceMetres: leg.distance,
-      isDisrupted: leg.isDisrupted ?? false,
-    })),
+    legs: (journey.legs ?? []).map((leg) => {
+      const lineName = pickLineName(leg.routeOptions)
+      const pathPoints = opts?.includeGeometry
+        ? decodePathPoints(leg.path?.lineString)
+        : undefined
+      return {
+        mode: leg.mode?.id ?? leg.mode?.name ?? "unknown",
+        ...(lineName ? { lineName } : {}),
+        instruction:
+          leg.instruction?.summary ?? leg.instruction?.detailed ?? "",
+        departureTime: leg.departureTime ?? "",
+        arrivalTime: leg.arrivalTime ?? "",
+        ...(leg.duration !== undefined
+          ? { durationMinutes: leg.duration }
+          : {}),
+        departurePoint: {
+          lat: leg.departurePoint?.lat ?? 0,
+          lon: leg.departurePoint?.lon ?? 0,
+        },
+        arrivalPoint: {
+          lat: leg.arrivalPoint?.lat ?? 0,
+          lon: leg.arrivalPoint?.lon ?? 0,
+        },
+        distanceMetres: leg.distance,
+        isDisrupted: leg.isDisrupted ?? false,
+        ...(pathPoints ? { pathPoints } : {}),
+      }
+    }),
   }))
 }
 
