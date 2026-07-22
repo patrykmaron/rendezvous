@@ -13,6 +13,10 @@ export const analysisOrigin = z.object({
   color: z.string(),
   lat: z.number(),
   lng: z.number(),
+  /** TfL journey-planner mode ids (whitelisted in travel.ts). Absent → defaults. */
+  transportModes: z.array(z.string()).optional(),
+  /** Route step-free when set (accessibilityPreference on the TfL call). */
+  requiresStepFree: z.boolean().optional(),
 })
 export type AnalysisOrigin = z.infer<typeof analysisOrigin>
 
@@ -33,6 +37,31 @@ export type Candidate = z.infer<typeof candidate>
 // two in sync — the web card reads these keys verbatim.
 // ---------------------------------------------------------------------------
 
+// Door-to-door TfL journey (G-phase). Split out as reusable sub-schemas so
+// journey-details can share the exact shape. Times are London-local ISO;
+// pathPoints are [lat, lon]. MIRROR of PlanCandidate.perParticipant[].journey
+// in apps/web/lib/types.ts — keep the two in sync.
+export const planJourneyLeg = z.object({
+  mode: z.string(),
+  lineName: z.string().optional(),
+  instruction: z.string(),
+  departureTime: z.string(),
+  arrivalTime: z.string(),
+  durationMinutes: z.number().optional(),
+  isDisrupted: z.boolean(),
+  pathPoints: z.array(z.tuple([z.number(), z.number()])).optional(),
+})
+export type PlanJourneyLeg = z.infer<typeof planJourneyLeg>
+
+export const planJourney = z.object({
+  durationMinutes: z.number(),
+  startDateTime: z.string(),
+  arrivalDateTime: z.string(),
+  fareTotalPence: z.number().optional(),
+  legs: z.array(planJourneyLeg),
+})
+export type PlanJourney = z.infer<typeof planJourney>
+
 export const planCandidate = z.object({
   h3: z.string(),
   name: z.string(),
@@ -47,29 +76,8 @@ export const planCandidate = z.object({
       name: z.string(),
       color: z.string(),
       minutes: z.number(),
-      // Door-to-door TfL journey (G-phase). Optional so pre-existing snapshots
-      // parse — mirror of PlanCandidate.perParticipant[].journey in
-      // apps/web/lib/types.ts. Times are London-local ISO; pathPoints [lat,lon].
-      journey: z
-        .object({
-          durationMinutes: z.number(),
-          startDateTime: z.string(),
-          arrivalDateTime: z.string(),
-          fareTotalPence: z.number().optional(),
-          legs: z.array(
-            z.object({
-              mode: z.string(),
-              lineName: z.string().optional(),
-              instruction: z.string(),
-              departureTime: z.string(),
-              arrivalTime: z.string(),
-              durationMinutes: z.number().optional(),
-              isDisrupted: z.boolean(),
-              pathPoints: z.array(z.tuple([z.number(), z.number()])).optional(),
-            })
-          ),
-        })
-        .optional(),
+      // Optional so pre-existing snapshots parse.
+      journey: planJourney.optional(),
     })
   ),
   venues: z.array(
