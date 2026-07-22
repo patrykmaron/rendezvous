@@ -5,7 +5,8 @@
     "typecheck": "tsc --noEmit"
   },
   "exports": {
-    "./trigger/room-agent.types": "./src/trigger/room-agent.types.ts"
+    "./trigger/room-agent.types": "./src/trigger/room-agent.types.ts",
+    "./trigger/extract-constraints.types": "./src/trigger/extract-constraints.types.ts"
   },
   "devDependencies": {
     "@trigger.dev/build": "4.5.6",

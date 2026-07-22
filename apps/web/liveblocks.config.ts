@@ -1,4 +1,4 @@
-import type { ChatMessage, ReactionUpdate } from "@/lib/types"
+import type { ChatMessage, ConstraintView, ReactionUpdate } from "@/lib/types"
 
 // Single source of truth for Liveblocks' per-room typing. Per ADR 0012,
 // Liveblocks carries ONLY ephemeral, presence-shaped state plus small
@@ -55,6 +55,11 @@ export type RoomEvent =
     }
   | { type: "plan:updated"; analysisId: string }
   | { type: "agent:started"; runId: string }
+  | {
+      type: "constraint:update"
+      action: "added" | "removed"
+      constraint: ConstraintView
+    }
 
 declare global {
   interface Liveblocks {

@@ -235,6 +235,7 @@ Rules:
 - Every chat message is at most 2 sentences.
 - Never paste tables, or lists of numbers, times, or scores into the chat — put results on the map instead.
 - Always reveal results by calling show_map; the chat is only a short, friendly summary.
+- Respect "must" constraints when choosing venues; treat "nice-to-have" as preferences.
 
 Workflow — call the tools in this order:
 1. generate_candidates — find candidate meeting areas from everyone's start points.
@@ -257,7 +258,13 @@ type LoadedContext = {
     label: string | null
   }>
   members: Array<{ name: string; color: string }>
-  constraints: Array<{ kind: string; isHard: boolean; payload: unknown }>
+  constraints: Array<{
+    kind: string
+    isHard: boolean
+    payload: unknown
+    participantId: string | null
+    authorName: string | null
+  }>
   history: Array<{ role: string; content: string; authorName: string | null }>
   triggerMessage: { content: string; authorName: string | null } | null
 }
@@ -301,8 +308,11 @@ async function loadContext(
       kind: constraintsTable.kind,
       isHard: constraintsTable.isHard,
       payload: constraintsTable.payload,
+      participantId: constraintsTable.participantId,
+      authorName: participants.displayName,
     })
     .from(constraintsTable)
+    .leftJoin(participants, eq(constraintsTable.participantId, participants.id))
     .where(eq(constraintsTable.roomId, roomId))
 
   const recent = await db
@@ -355,10 +365,17 @@ function buildInstructions(ctx: LoadedContext): string {
       .join("; ") || "(none)"
   const constraintList =
     ctx.constraints
-      .map(
-        (c) =>
-          `${c.kind}${c.isHard ? " (hard)" : " (soft)"}: ${JSON.stringify(c.payload)}`
-      )
+      .map((c) => {
+        // Prefer the extractor's human `summary` (ADR 0019); older rows without
+        // one fall back to the raw payload JSON.
+        const summary =
+          c.payload &&
+          typeof c.payload === "object" &&
+          typeof (c.payload as Record<string, unknown>).summary === "string"
+            ? ((c.payload as Record<string, unknown>).summary as string)
+            : JSON.stringify(c.payload)
+        return `${c.kind}${c.isHard ? " (must)" : " (nice-to-have)"} — ${summary} [${c.authorName ?? "whole group"}]`
+      })
       .join("; ") || "None"
   const trigger = ctx.triggerMessage
     ? `"${ctx.triggerMessage.content}"${ctx.triggerMessage.authorName ? ` — from ${ctx.triggerMessage.authorName}` : ""}`

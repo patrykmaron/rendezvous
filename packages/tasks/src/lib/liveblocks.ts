@@ -8,6 +8,23 @@ export type TaskRoomEvent =
   | { type: "plan:updated"; analysisId: string }
   | { type: "agent:started"; runId: string }
   | {
+      // Mirrors the web RoomEvent's `constraint:update` variant (its
+      // `constraint` is a ConstraintView). `kind` is a plain string here —
+      // the app narrows it to its ConstraintKind union on receipt.
+      type: "constraint:update"
+      action: "added" | "removed"
+      constraint: {
+        id: string
+        roomId: string
+        participantId: string | null
+        kind: string
+        isHard: boolean
+        summary: string
+        createdAt: string
+        author?: { name: string; color: string }
+      }
+    }
+  | {
       type: "message:new"
       message: {
         id: string

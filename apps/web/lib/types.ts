@@ -35,6 +35,43 @@ export type ReactionUpdate = {
   action: "added" | "removed"
 }
 
+// The planning-constraint taxonomy the extractor (ADR 0019) classifies chat
+// messages into. Kept as a runtime `as const` tuple so both the strict OpenAI
+// json_schema enum (mirrored task-side) and the chip icon map can key off it.
+export const CONSTRAINT_KINDS = [
+  "diet",
+  "accessibility",
+  "budget",
+  "area",
+  "time",
+  "venue_type",
+  "transport",
+  "other",
+] as const
+export type ConstraintKind = (typeof CONSTRAINT_KINDS)[number]
+
+// One planning constraint as rendered in the chat's chip strip. Assembled by
+// the constraints API and the extractor's `constraint:update` broadcasts.
+// `participantId === null` = a room-wide constraint (no author chip tint).
+export type ConstraintView = {
+  id: string
+  roomId: string
+  participantId: string | null // null = room-wide
+  kind: ConstraintKind
+  isHard: boolean
+  summary: string // human chip label, <=40 chars
+  createdAt: string // ISO-8601
+  author?: { name: string; color: string } // absent for room-wide
+}
+
+// Narrows a free-text DB `kind` to the known union, defaulting unknown/legacy
+// values to "other" so ConstraintView.kind stays honest for the chip icon map.
+export function asConstraintKind(kind: string): ConstraintKind {
+  return (CONSTRAINT_KINDS as readonly string[]).includes(kind)
+    ? (kind as ConstraintKind)
+    : "other"
+}
+
 // A participant's start point on the map. Enriched with the owner's display
 // name + colour (joined from `participants`) so a marker can be drawn without a
 // second lookup. `label` is an optional human place name ("Home", "Work").
