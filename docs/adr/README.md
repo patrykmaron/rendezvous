@@ -28,6 +28,8 @@ An ADR is immutable once accepted: if a decision is reversed or refined, a new A
 | [0018](0018-google-places-preview-enrichment.md)         | Server-proxied Google Places (New) venue previews, in-process cache                      | Accepted |
 | [0019](0019-background-constraint-extraction.md)         | Background constraint extraction from every chat message via a Trigger.dev task          | Accepted |
 | [0020](0020-google-validation-backfill-for-plan-venues.md) | Validate + backfill plan venues against Google Places (New) inside `ch-get-venues`      | Accepted |
+| [0021](0021-auto-replan-on-constraint-changes.md)        | Auto re-plan the room when its inputs change after a plan exists                          | Accepted |
+| [0022](0022-plan-surface-contract.md)                    | The plan surface contract: retention, geometry placement, votes, and settings            | Accepted |
 
 ## Adding an ADR
 
