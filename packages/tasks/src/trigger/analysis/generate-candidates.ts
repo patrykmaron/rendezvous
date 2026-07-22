@@ -2,6 +2,7 @@ import { chQuery } from "@workspace/db/clickhouse/query"
 import { logger, schemaTask } from "@trigger.dev/sdk"
 import { z } from "zod"
 
+import { areaNameSubquery } from "./area-name"
 import { analysisOrigin, type Candidate } from "./types"
 
 const generateCandidatesPayload = z.object({
@@ -88,21 +89,31 @@ export const generateCandidatesTask = schemaTask({
     }
 
     const cells = dense.map((r) => r.h3)
-    // One enrichment query: display name (any place in the cell) + centroid
-    // (h3ToGeo returns a (latitude, longitude) tuple on this cluster).
+    // One enrichment query: most-specific area name (LEFT JOIN so a cell with
+    // no specific locality keeps its centroid and falls back below, instead of
+    // being dropped) + centroid (h3ToGeo returns a (latitude, longitude) tuple
+    // on this cluster).
     const enriched = await chQuery<{
       h3: string
       name: string
       lat: number
       lng: number
     }>(
-      `SELECT toString(h3_8) AS h3,
-              any(display_area) AS name,
-              h3ToGeo(h3_8).1 AS lat,
-              h3ToGeo(h3_8).2 AS lng
-       FROM places
-       WHERE h3_8 IN (SELECT toUInt64(arrayJoin({cells:Array(String)})))
-       GROUP BY h3_8`,
+      `SELECT toString(pl.h3_8) AS h3,
+              nm.name AS name,
+              h3ToGeo(pl.h3_8).1 AS lat,
+              h3ToGeo(pl.h3_8).2 AS lng
+       FROM (
+         SELECT h3_8
+         FROM places
+         WHERE h3_8 IN (SELECT toUInt64(arrayJoin({cells:Array(String)})))
+         GROUP BY h3_8
+       ) AS pl
+       LEFT JOIN (
+         ${areaNameSubquery(
+           "h3_8 IN (SELECT toUInt64(arrayJoin({cells:Array(String)})))"
+         )}
+       ) AS nm ON pl.h3_8 = nm.h3_8`,
       { cells }
     )
     const enrichedByH3 = new Map(enriched.map((e) => [e.h3, e]))
@@ -115,7 +126,7 @@ export const generateCandidatesTask = schemaTask({
           h3: row.h3,
           lat: meta.lat,
           lng: meta.lng,
-          name: meta.name || "Unknown area",
+          name: meta.name || "London",
           venueDensity: Number(row.venue_density),
         },
       ]

@@ -2,6 +2,8 @@ import { chCommand, chQuery } from "@workspace/db/clickhouse/query"
 import { logger, schemaTask } from "@trigger.dev/sdk"
 import { z } from "zod"
 
+import { areaNameSubquery } from "./area-name"
+
 const scoreCandidatesPayload = z.object({
   analysisId: z.uuid(),
   roomId: z.uuid(),
@@ -109,20 +111,19 @@ export const scoreCandidatesTask = schemaTask({
              sum(ro.interchange_count) AS total_interchanges,
              avg(ro.accessibility_ok) AS accessibility_score,
              any(vd.pc) AS venue_pc,
-             any(pl.name) AS candidate_name
+             coalesce(any(pl.name), '') AS candidate_name
            FROM route_observations ro
            LEFT JOIN (
              SELECT h3_8, sum(place_count) AS pc
              FROM area_category_counts GROUP BY h3_8
            ) vd ON ro.candidate_h3 = vd.h3_8
            LEFT JOIN (
-             SELECT h3_8, any(display_area) AS name
-             FROM places
-             WHERE h3_8 IN (
-               SELECT candidate_h3 FROM route_observations
-               WHERE analysis_id = {analysisId:UUID}
-             )
-             GROUP BY h3_8
+             ${areaNameSubquery(
+               `h3_8 IN (
+                 SELECT candidate_h3 FROM route_observations
+                 WHERE analysis_id = {analysisId:UUID}
+               )`
+             )}
            ) pl ON ro.candidate_h3 = pl.h3_8
            WHERE ro.analysis_id = {analysisId:UUID} AND ro.route_status = 'ok'
            GROUP BY ro.candidate_h3
@@ -187,7 +188,7 @@ export const scoreCandidatesTask = schemaTask({
 
     const result: RankedCandidate[] = ranked.map((r) => ({
       h3: r.h3,
-      name: r.candidate_name || "Unknown area",
+      name: r.candidate_name || "London",
       rank: r.candidate_rank,
       overallScore: r.overall_score,
       fairnessScore: r.fairness_score,

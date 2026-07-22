@@ -161,7 +161,8 @@ const TOOLS: Tool[] = [
         },
         categories: {
           type: ["array", "null"],
-          description: "Optional venue category filter, or null for any.",
+          description:
+            "Free-text venue keywords, matched case-insensitively as substrings against Foursquare taxonomy labels (e.g. \"steakhouse\", \"cocktail bar\", \"vegan\", \"coffee\", \"live music\"). Derive them from the room's constraints/chat when the group expressed a venue preference; pass null for a general mix.",
           items: { type: "string" },
         },
       },
@@ -241,7 +242,7 @@ Workflow — call the tools in this order:
 1. generate_candidates — find candidate meeting areas from everyone's start points.
 2. compute_route_matrix — get everyone's journey times to those areas.
 3. rank_candidates — rank the areas for fairness and speed.
-4. fetch_venues — get venues for the top-ranked area.
+4. fetch_venues — get venues for the top-ranked areas; pass category keywords when the group expressed venue preferences (e.g. steak → "steakhouse").
 5. show_map — drop pins for the top 3 areas (kind "candidate", with rank) plus the venues (kind "venue") for the winner, optionally draw routes to and focus the winner, so the group can see the plan.
 6. send_chat — one short, friendly summary of your recommendation.
 
@@ -928,8 +929,11 @@ function assemblePlanResult(
 ): PlanResult {
   const ranked = state.ranked ?? []
   const top3 = ranked.slice(0, 3)
-  const candidates = top3.map((r, idx) => {
-    const venues = idx === 0 ? (state.venuesByCell?.get(r.h3) ?? []) : []
+  const candidates = top3.map((r) => {
+    // Every top-3 candidate carries its own cell's venues (fetch_venues fetched
+    // all three) so each row can show venue chips; the map's winner-only venue
+    // pins are handled separately in publishFinalOverlay.
+    const venues = state.venuesByCell?.get(r.h3) ?? []
     return {
       h3: r.h3,
       name: r.name,

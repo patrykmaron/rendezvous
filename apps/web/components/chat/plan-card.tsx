@@ -43,7 +43,7 @@ function CandidateRow({
   onVenuePreview: (candidate: PlanCandidate, venueIndex: number) => void
 }) {
   const venues = candidate.venues.slice(0, 3)
-  const showVenues = candidate.rank === 1 && venues.length > 0
+  const showVenues = venues.length > 0
   return (
     // The venue chips below are their own <button>s — nesting them inside
     // the row's button would be invalid HTML, so this cell is a plain div
