@@ -41,7 +41,9 @@ import { cellToLatLng, isValidCell } from "h3-js"
 
 import { askAgent } from "@/app/actions/agent"
 import { changeColor, joinRoom } from "@/app/actions/room"
+import { decidePlan, toggleVote } from "@/app/actions/vote"
 import { ChatPanel } from "@/components/chat/chat-panel"
+import { EventTimeChip } from "@/components/room/event-time-chip"
 import {
   CursorOverlay,
   useSurfaceCursor,
@@ -268,11 +270,13 @@ function RoomView({
   roomId,
   roomName,
   session,
+  initialEventAt,
   onColorChange,
 }: {
   roomId: string
   roomName: string
   session: RoomSession
+  initialEventAt: string | null
   onColorChange: (color: string) => void
 }) {
   const self = useSelf()
@@ -345,6 +349,16 @@ function RoomView({
   // agent overlay replaced it, or the run was superseded).
   const [preview, setPreview] = React.useState<PlacePreviewTarget | null>(null)
 
+  // Room-level target meeting time (London wall-clock string, or null). Seeded
+  // from the server, kept live by the settings:update listener below and by the
+  // chip's own optimistic echo. Feeds the header chip; the routing pipeline
+  // reads the durable copy from rooms.settings.
+  const [eventAt, setEventAt] = React.useState<string | null>(initialEventAt)
+
+  // Whether THIS participant is the room's effective host — gates the "Lock it
+  // in" control. Derived from the members API's isHost flag (see lib/host.ts).
+  const [isHost, setIsHost] = React.useState(false)
+
   // Live agent state (Trigger.dev realtime): active/last run, status, streamed
   // text, map overlay, timeline, routing progress. Drives the map overlay, the
   // chat activity row, and the toasts below. Read-only — starting a run goes
@@ -405,6 +419,62 @@ function RoomView({
       }
     })
   }, [session.sessionToken, roomId])
+
+  // Toggle my approval vote on a candidate area. Broadcast-driven like reactions
+  // (the vote:update echo updates usePlan — no optimistic local patch), so this
+  // just fires the durable toggle against the DISPLAYED plan's snapshot. A stale
+  // snapshot (a re-plan already superseded it) refetches the plan authoritatively.
+  const handleToggleVote = React.useCallback(
+    (candidateH3: string) => {
+      const snapshotId = planState.data?.plan?.id
+      if (!snapshotId) return
+      React.startTransition(async () => {
+        try {
+          const res = await toggleVote(
+            session.sessionToken,
+            roomId,
+            snapshotId,
+            candidateH3
+          )
+          if (!res.ok && res.error === "stale_snapshot") planState.refetch()
+        } catch (err) {
+          console.error("toggleVote failed", err)
+        }
+      })
+    },
+    [session.sessionToken, roomId, planState]
+  )
+
+  // Host-only: lock in a candidate as the decision. decided:update patches every
+  // tab (incl. this one) via usePlan; failures surface as a toast.
+  const handleDecide = React.useCallback(
+    (candidateH3: string) => {
+      const snapshotId = planState.data?.plan?.id
+      if (!snapshotId) return
+      React.startTransition(async () => {
+        try {
+          const res = await decidePlan(
+            session.sessionToken,
+            roomId,
+            snapshotId,
+            candidateH3
+          )
+          if (!res.ok) {
+            if (res.error === "stale_snapshot") planState.refetch()
+            else if (res.error === "not_host")
+              toast.error("Only the host can lock in a spot.")
+            else if (res.error === "already_decided")
+              toast.error("A spot is already locked in.")
+            else toast.error("Couldn't lock it in — please try again.")
+          }
+        } catch (err) {
+          console.error("decidePlan failed", err)
+          toast.error("Couldn't lock it in — please try again.")
+        }
+      })
+    },
+    [session.sessionToken, roomId, planState]
+  )
 
   // Paint a chosen plan candidate onto the map and fly to it: a pin for the
   // area (its H3 cell centre) plus a pin per venue. Called from the chat
@@ -529,14 +599,20 @@ function RoomView({
         participantId: string
         name: string
         color: string
+        isHost?: boolean
       }> = await res.json()
       membersRef.current = new Map(
         members.map((m) => [m.participantId, { name: m.name, color: m.color }])
       )
+      const mine = members.find(
+        (m) => m.participantId === session.participantId
+      )
+      // setState after the awaited fetch, not synchronously in an effect body.
+      setIsHost(!!mine?.isHost)
     } catch {
       // Non-fatal: enrichment falls back to a full origins refetch.
     }
-  }, [roomId])
+  }, [roomId, session.participantId])
 
   const loadOrigins = React.useCallback(async () => {
     try {
@@ -552,10 +628,11 @@ function RoomView({
   }, [roomId, session.sessionToken])
 
   React.useEffect(() => {
-    void loadMembers()
-    // Fetch-on-mount: setOrigins runs asynchronously after the await, not
-    // synchronously in the effect body, so it doesn't cascade renders.
+    // Fetch-on-mount: loadMembers (setIsHost) and loadOrigins (setOrigins) both
+    // setState only after their awaited fetch resolves, not synchronously in the
+    // effect body, so they don't cascade renders.
     // eslint-disable-next-line react-hooks/set-state-in-effect
+    void loadMembers()
     void loadOrigins()
   }, [loadMembers, loadOrigins])
 
@@ -593,6 +670,11 @@ function RoomView({
       if (!chatOpen && event.message.participantId !== session.participantId) {
         setHasUnread(true)
       }
+      return
+    }
+    if (event.type === "settings:update") {
+      // Full-payload nudge (ADR 0014): the event time changed in another tab.
+      setEventAt(event.eventAt)
       return
     }
     if (event.type !== "origin:update") return
@@ -662,6 +744,12 @@ function RoomView({
           >
             <LinkIcon />
           </Button>
+          <EventTimeChip
+            roomId={roomId}
+            sessionToken={session.sessionToken}
+            eventAt={eventAt}
+            onChanged={setEventAt}
+          />
         </div>
 
         <div className="flex shrink-0 items-center gap-3">
@@ -822,8 +910,12 @@ function RoomView({
             votes={planState.data?.votes ?? []}
             myVotes={planState.data?.myVotes ?? []}
             decision={planState.data?.decision ?? null}
+            myColor={myColor}
+            isHost={isHost}
             onFocusCandidate={focusCandidate}
             onVenuePreview={handleVenuePreview}
+            onToggleVote={handleToggleVote}
+            onDecide={handleDecide}
           />
           <CursorOverlay surface="chat" />
         </aside>
@@ -888,9 +980,11 @@ function subscribeToSessionStorage(onChange: () => void): () => void {
 export function RoomShell({
   roomId,
   roomName,
+  initialEventAt,
 }: {
   roomId: string
   roomName: string
+  initialEventAt: string | null
 }) {
   const storedSession = React.useSyncExternalStore(
     subscribeToSessionStorage,
@@ -964,6 +1058,7 @@ export function RoomShell({
             roomId={roomId}
             roomName={roomName}
             session={activeSession}
+            initialEventAt={initialEventAt}
             onColorChange={handleColorChange}
           />
         </ClientSideSuspense>

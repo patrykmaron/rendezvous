@@ -56,9 +56,13 @@ export function MessageList({
   votes,
   myVotes,
   decision,
+  myColor,
+  isHost,
   agent,
   onFocus,
   onVenuePreview,
+  onToggleVote,
+  onDecide,
   onToggleReaction,
 }: {
   messages: ChatMessage[]
@@ -70,9 +74,13 @@ export function MessageList({
   votes: VoteTally[]
   myVotes: string[]
   decision: RoomDecision | null
+  myColor: string
+  isHost: boolean
   agent: ChatAgentActivity
   onFocus: (candidate: PlanCandidate) => void
   onVenuePreview: (candidate: PlanCandidate, venueIndex: number) => void
+  onToggleVote: (candidateH3: string) => void
+  onDecide: (candidateH3: string) => void
   onToggleReaction: (messageId: string, emoji: string) => void
 }) {
   const containerRef = React.useRef<HTMLDivElement>(null)
@@ -190,8 +198,12 @@ export function MessageList({
               votes={votes}
               myVotes={myVotes}
               decision={decision}
+              myColor={myColor}
+              isHost={isHost}
               onFocus={onFocus}
               onVenuePreview={onVenuePreview}
+              onToggleVote={onToggleVote}
+              onDecide={onDecide}
             />
           ) : null}
 

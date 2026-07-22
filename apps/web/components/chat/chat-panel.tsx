@@ -99,8 +99,12 @@ export function ChatPanel({
   votes,
   myVotes,
   decision,
+  myColor,
+  isHost,
   onFocusCandidate,
   onVenuePreview,
+  onToggleVote,
+  onDecide,
 }: {
   roomId: string
   session: RoomSession
@@ -113,8 +117,12 @@ export function ChatPanel({
   votes: VoteTally[]
   myVotes: string[]
   decision: RoomDecision | null
+  myColor: string
+  isHost: boolean
   onFocusCandidate: (candidate: PlanCandidate) => void
   onVenuePreview: (candidate: PlanCandidate, venueIndex: number) => void
+  onToggleVote: (candidateH3: string) => void
+  onDecide: (candidateH3: string) => void
 }) {
   const [messages, setMessages] = React.useState<ChatMessage[]>([])
 
@@ -282,9 +290,13 @@ export function ChatPanel({
           votes={votes}
           myVotes={myVotes}
           decision={decision}
+          myColor={myColor}
+          isHost={isHost}
           agent={agent}
           onFocus={onFocusCandidate}
           onVenuePreview={onVenuePreview}
+          onToggleVote={onToggleVote}
+          onDecide={onDecide}
           onToggleReaction={handleToggleReaction}
         />
         <TypingRow />

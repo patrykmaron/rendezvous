@@ -21,7 +21,7 @@ export default async function RoomPage({
 
   const db = getDb()
   const [room] = await db
-    .select({ id: rooms.id, name: rooms.name })
+    .select({ id: rooms.id, name: rooms.name, settings: rooms.settings })
     .from(rooms)
     .where(eq(rooms.id, roomId))
     .limit(1)
@@ -29,5 +29,11 @@ export default async function RoomPage({
     notFound()
   }
 
-  return <RoomShell roomId={room.id} roomName={room.name} />
+  return (
+    <RoomShell
+      roomId={room.id}
+      roomName={room.name}
+      initialEventAt={room.settings?.eventAt ?? null}
+    />
+  )
 }

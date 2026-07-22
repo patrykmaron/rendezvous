@@ -1,9 +1,12 @@
 "use client"
 
 import { ArrowsClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowsClockwise"
+import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle"
+import { HeartIcon } from "@phosphor-icons/react/dist/csr/Heart"
 import { MapPinIcon } from "@phosphor-icons/react/dist/csr/MapPin"
 import { TrophyIcon } from "@phosphor-icons/react/dist/csr/Trophy"
 
+import { Button } from "@workspace/ui/components/button"
 import { cn } from "@workspace/ui/lib/utils"
 
 import type {
@@ -39,22 +42,74 @@ function RankBadge({ rank }: { rank: number }) {
   )
 }
 
+/** Approval-vote heart + count. Its own <button> (never nested in the row's
+ *  focus button — invalid HTML). Filled + tinted the caller's colour when mine. */
+function VoteHeart({
+  count,
+  mine,
+  color,
+  disabled,
+  onClick,
+}: {
+  count: number
+  mine: boolean
+  color: string
+  disabled: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      aria-pressed={mine}
+      aria-label={mine ? "Remove your vote" : "Vote for this area"}
+      onClick={onClick}
+      className="inline-flex items-center gap-1 rounded-full border border-border/60 px-2 py-0.5 text-[11px] text-muted-foreground transition-colors outline-none hover:border-foreground/30 hover:bg-muted hover:text-foreground focus-visible:bg-muted disabled:pointer-events-none disabled:opacity-50"
+    >
+      <HeartIcon
+        weight={mine ? "fill" : "regular"}
+        className="size-3.5"
+        style={mine ? { color } : undefined}
+      />
+      <span className="tabular-nums">{count}</span>
+    </button>
+  )
+}
+
 function CandidateRow({
   candidate,
+  voteCount,
+  mine,
+  myColor,
+  voteDisabled,
+  locked,
+  showLockIn,
   onFocus,
   onVenuePreview,
+  onToggleVote,
+  onDecide,
 }: {
   candidate: PlanCandidate
+  voteCount: number
+  mine: boolean
+  myColor: string
+  voteDisabled: boolean
+  // This row is the locked-in decision (gold-tinted, badge, no vote/lock-in).
+  locked: boolean
+  // Host + leading + not decided + not replanning → show the "Lock it in" button.
+  showLockIn: boolean
   onFocus: (candidate: PlanCandidate) => void
   onVenuePreview: (candidate: PlanCandidate, venueIndex: number) => void
+  onToggleVote: (candidateH3: string) => void
+  onDecide: (candidateH3: string) => void
 }) {
   const venues = candidate.venues.slice(0, 3)
   const showVenues = venues.length > 0
   return (
-    // The venue chips below are their own <button>s — nesting them inside
-    // the row's button would be invalid HTML, so this cell is a plain div
-    // and the row click target is just the button wrapping everything else.
-    <div className="flex flex-col">
+    // The venue chips and vote/lock controls below are their own <button>s —
+    // nesting them inside the row's focus button would be invalid HTML, so this
+    // cell is a plain div and the focus target is just the top button.
+    <div className={cn("flex flex-col", locked && "border-l-2 border-l-amber-400")}>
       <button
         type="button"
         onClick={() => onFocus(candidate)}
@@ -88,7 +143,7 @@ function CandidateRow({
       </button>
 
       {showVenues ? (
-        <div className="flex flex-wrap items-center gap-1 px-3 pb-2.5 pl-7">
+        <div className="flex flex-wrap items-center gap-1 px-3 pb-1.5 pl-7">
           <MapPinIcon
             weight="fill"
             className="size-3 shrink-0 text-muted-foreground"
@@ -106,6 +161,35 @@ function CandidateRow({
           ))}
         </div>
       ) : null}
+
+      <div className="flex items-center gap-2 px-3 pb-2.5 pl-7">
+        {locked ? (
+          <span className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-600 dark:text-amber-400">
+            <CheckCircleIcon weight="fill" className="size-3.5" />
+            Locked in
+          </span>
+        ) : (
+          <VoteHeart
+            count={voteCount}
+            mine={mine}
+            color={myColor}
+            disabled={voteDisabled}
+            onClick={() => onToggleVote(candidate.h3)}
+          />
+        )}
+        {showLockIn ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="xs"
+            className="ml-auto"
+            onClick={() => onDecide(candidate.h3)}
+          >
+            <CheckCircleIcon />
+            Lock it in
+          </Button>
+        ) : null}
+      </div>
     </div>
   )
 }
@@ -119,28 +203,40 @@ function CandidateRow({
  * retained), where AgentActivity covers the gap. Clicking a row focuses the map.
  *
  * `replanning` shows a spinning badge + border tint over the retained plan;
- * `updateFailed` adds a note that the previous plan is still shown. `votes` /
- * `myVotes` / `decision` are threaded now for later phases (hearts / decided
- * banner) and not yet rendered here.
+ * `updateFailed` adds a note that the previous plan is still shown. Each row
+ * carries an approval-vote heart (`votes` / `myVotes`, disabled while
+ * `replanning` or once decided); the host sees a "Lock it in" button on the
+ * leading area, and once `decision` is set that row renders locked. The richer
+ * map-side carousel + DecidedBanner are a later phase.
  */
 export function PlanCard({
   plan,
   replanning,
   updateFailed,
   updatingLabel,
+  votes,
+  myVotes,
+  decision,
+  myColor,
+  isHost,
   onFocus,
   onVenuePreview,
+  onToggleVote,
+  onDecide,
 }: {
   plan: PlanSnapshotView
   replanning: boolean
   updateFailed: boolean
   updatingLabel: string
-  // Reserved for the voting / decide phases; not rendered yet.
   votes: VoteTally[]
   myVotes: string[]
   decision: RoomDecision | null
+  myColor: string
+  isHost: boolean
   onFocus: (candidate: PlanCandidate) => void
   onVenuePreview: (candidate: PlanCandidate, venueIndex: number) => void
+  onToggleVote: (candidateH3: string) => void
+  onDecide: (candidateH3: string) => void
 }) {
   if (plan.status === "running" || plan.status === "pending") return null
 
@@ -156,6 +252,26 @@ export function PlanCard({
     .sort((a, b) => a.rank - b.rank)
     .slice(0, 3)
   if (candidates.length === 0) return null
+
+  const voteCountByH3 = new Map(votes.map((v) => [v.candidateH3, v.voterIds.length]))
+  const myVoteSet = new Set(myVotes)
+  // Hearts are disabled during a re-plan (votes would land on a snapshot about
+  // to be superseded — critique §E) and once a decision is locked in.
+  const voteDisabled = replanning || decision !== null
+
+  // Leading area = most approvals, tie-break by rank (lowest wins) — the row
+  // that gets the host's "Lock it in" button. With no votes yet this is rank 1.
+  const leadingH3 =
+    candidates.reduce<PlanCandidate | null>((best, c) => {
+      if (!best) return c
+      const cv = voteCountByH3.get(c.h3) ?? 0
+      const bv = voteCountByH3.get(best.h3) ?? 0
+      if (cv > bv) return c
+      if (cv === bv && c.rank < best.rank) return c
+      return best
+    }, null)?.h3 ?? null
+
+  const canLockIn = isHost && !replanning && decision === null
 
   return (
     <div
@@ -184,8 +300,16 @@ export function PlanCard({
           <CandidateRow
             key={candidate.h3}
             candidate={candidate}
+            voteCount={voteCountByH3.get(candidate.h3) ?? 0}
+            mine={myVoteSet.has(candidate.h3)}
+            myColor={myColor}
+            voteDisabled={voteDisabled}
+            locked={decision?.candidateH3 === candidate.h3}
+            showLockIn={canLockIn && candidate.h3 === leadingH3}
             onFocus={onFocus}
             onVenuePreview={onVenuePreview}
+            onToggleVote={onToggleVote}
+            onDecide={onDecide}
           />
         ))}
       </div>
