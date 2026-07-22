@@ -14,6 +14,7 @@ import {
 // `tasks.trigger` its payload/output typing without dragging the task graph
 // into web's compile (see room-agent.types.ts for why).
 import type { RoomAgentTask } from "@workspace/tasks/trigger/room-agent.types"
+import type { ExtractConstraintsTask } from "@workspace/tasks/trigger/extract-constraints.types"
 
 import { ASSISTANT_AUTHOR } from "@/lib/persona"
 import { broadcastRoomEvent } from "@/lib/liveblocks-server"
@@ -152,6 +153,27 @@ export async function startAnalysis(opts: {
   }
 
   return { runId: handle.id, analysisId }
+}
+
+/**
+ * Fire-and-forget kick of the always-listening constraint extractor (ADR 0019)
+ * for one chat message. Per-room-serialized via `concurrencyKey: roomId` (see
+ * the extract-constraints queue), tagged like the agent run so the room's
+ * realtime token can observe it. Callers wrap this in try/catch — extraction
+ * must never block or fail the underlying message send.
+ */
+export async function queueConstraintExtraction(opts: {
+  roomId: string
+  messageId: string
+  participantId: string
+  content: string
+}): Promise<void> {
+  const { roomId, messageId, participantId, content } = opts
+  await tasks.trigger<ExtractConstraintsTask>(
+    "extract-constraints",
+    { roomId, messageId, participantId, content },
+    { concurrencyKey: roomId, tags: [`room:${roomId}`] }
+  )
 }
 
 /**

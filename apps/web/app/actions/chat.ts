@@ -7,6 +7,7 @@ import { messageReactions, messages } from "@workspace/db/schema"
 import {
   NeedsOriginsError,
   postSystemMessage,
+  queueConstraintExtraction,
   startAnalysis,
 } from "@/lib/agent-trigger"
 import { requireMember } from "@/lib/auth"
@@ -92,6 +93,25 @@ export async function sendMessage(
     await broadcastRoomEvent(roomId, { type: "message:new", message })
   } catch (err) {
     console.warn("sendMessage: broadcast message:new failed", err)
+  }
+
+  // Always-listening constraint extraction (ADR 0019). Every qualifying message
+  // fire-and-forget triggers a per-room-serialized background task that mines
+  // planning constraints ("I'm vegetarian", "no stairs") into the constraints
+  // table. Skipped for trivially short messages (measured after stripping any
+  // @agent mention, so "@agent" alone doesn't qualify). Entirely best-effort:
+  // a trigger failure must NEVER block or fail the user's message send.
+  if (trimmed.replace(AGENT_MENTION_RE, "").trim().length >= 8) {
+    try {
+      await queueConstraintExtraction({
+        roomId,
+        messageId: inserted.id,
+        participantId: participant.id,
+        content: trimmed,
+      })
+    } catch (err) {
+      console.warn("sendMessage: queueConstraintExtraction failed", err)
+    }
   }
 
   // An @agent mention kicks off the same analysis as the header button
