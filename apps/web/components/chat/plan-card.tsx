@@ -1,11 +1,17 @@
 "use client"
 
+import { ArrowsClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowsClockwise"
 import { MapPinIcon } from "@phosphor-icons/react/dist/csr/MapPin"
 import { TrophyIcon } from "@phosphor-icons/react/dist/csr/Trophy"
 
 import { cn } from "@workspace/ui/lib/utils"
 
-import type { PlanCandidate, PlanSnapshotView } from "@/lib/types"
+import type {
+  PlanCandidate,
+  PlanSnapshotView,
+  RoomDecision,
+  VoteTally,
+} from "@/lib/types"
 
 function mins(value: number): string {
   return `${Math.round(value)}m`
@@ -105,18 +111,34 @@ function CandidateRow({
 }
 
 /**
- * The agent's results card, pinned at the bottom of the message list. Renders
- * the top-3 candidate areas of the latest COMPLETE plan snapshot; a FAILED
- * snapshot collapses to a thin muted row, and running/pending render nothing
- * (the agent-status UI arrives in Task 9). Clicking a row asks the shell to
- * focus the map on that candidate.
+ * The agent's results card, pinned at the bottom of the message list. `plan` is
+ * the retained plan from usePlan (server keeps the newest COMPLETE snapshot), so
+ * this card stays put while a re-plan runs. Renders the top-3 candidate areas;
+ * a FAILED snapshot collapses to a thin muted row, and running/pending render
+ * nothing — now only reachable pre-first-plan (no complete plan was ever
+ * retained), where AgentActivity covers the gap. Clicking a row focuses the map.
+ *
+ * `replanning` shows a spinning badge + border tint over the retained plan;
+ * `updateFailed` adds a note that the previous plan is still shown. `votes` /
+ * `myVotes` / `decision` are threaded now for later phases (hearts / decided
+ * banner) and not yet rendered here.
  */
 export function PlanCard({
   plan,
+  replanning,
+  updateFailed,
+  updatingLabel,
   onFocus,
   onVenuePreview,
 }: {
   plan: PlanSnapshotView
+  replanning: boolean
+  updateFailed: boolean
+  updatingLabel: string
+  // Reserved for the voting / decide phases; not rendered yet.
+  votes: VoteTally[]
+  myVotes: string[]
+  decision: RoomDecision | null
   onFocus: (candidate: PlanCandidate) => void
   onVenuePreview: (candidate: PlanCandidate, venueIndex: number) => void
 }) {
@@ -136,11 +158,27 @@ export function PlanCard({
   if (candidates.length === 0) return null
 
   return (
-    <div className="mt-2 overflow-hidden border border-border bg-card">
+    <div
+      className={cn(
+        "mt-2 overflow-hidden border bg-card",
+        replanning ? "border-primary/50" : "border-border"
+      )}
+    >
       <div className="flex items-center gap-2 border-b border-border px-3 py-2">
         <TrophyIcon weight="fill" className="size-4 text-primary" />
         <span className="text-xs font-medium">Fair spots to meet</span>
+        {replanning ? (
+          <span className="ml-auto flex min-w-0 items-center gap-1 text-[11px] text-muted-foreground">
+            <ArrowsClockwiseIcon className="size-3 shrink-0 animate-spin" />
+            <span className="truncate">{updatingLabel}</span>
+          </span>
+        ) : null}
       </div>
+      {updateFailed ? (
+        <div className="border-b border-border bg-muted/30 px-3 py-1.5 text-[11px] text-muted-foreground">
+          Couldn&apos;t update — showing the previous plan.
+        </div>
+      ) : null}
       <div className="divide-y divide-border">
         {candidates.map((candidate) => (
           <CandidateRow

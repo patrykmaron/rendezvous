@@ -14,6 +14,8 @@ import type {
   MessageReactionSummary,
   PlanCandidate,
   PlanSnapshotView,
+  RoomDecision,
+  VoteTally,
 } from "@/lib/types"
 
 import { Composer } from "./composer"
@@ -81,29 +83,40 @@ function applyReaction(
 /**
  * The room's chat panel: owns the message list state, hydrates history over
  * the authenticated messages API, and folds in realtime nudges (message:new,
- * reaction:update, plan:updated) per ADR 0012. Durable writes go through the
- * chat server actions; presence/typing stay ephemeral in Liveblocks.
+ * reaction:update) per ADR 0012. Durable writes go through the chat server
+ * actions; presence/typing stay ephemeral in Liveblocks. The plan slice
+ * (retained plan + votes + decision) is owned by RoomView (usePlan) and passed
+ * in — this panel is a read-only consumer of it.
  */
 export function ChatPanel({
   roomId,
   session,
   agent,
-  completedRunId,
+  plan,
+  replanning,
+  updateFailed,
+  updatingLabel,
+  votes,
+  myVotes,
+  decision,
   onFocusCandidate,
   onVenuePreview,
 }: {
   roomId: string
   session: RoomSession
   agent: ChatAgentActivity
-  // Run id of the newest run once it reaches a final status; a change triggers
-  // an authoritative plan refetch (belt-and-braces with the `plan:updated`
-  // nudge below — deduped so a given completion refetches at most once).
-  completedRunId: string | undefined
+  // Plan slice from RoomView's usePlan (see hooks/use-plan.ts).
+  plan: PlanSnapshotView | null
+  replanning: boolean
+  updateFailed: boolean
+  updatingLabel: string
+  votes: VoteTally[]
+  myVotes: string[]
+  decision: RoomDecision | null
   onFocusCandidate: (candidate: PlanCandidate) => void
   onVenuePreview: (candidate: PlanCandidate, venueIndex: number) => void
 }) {
   const [messages, setMessages] = React.useState<ChatMessage[]>([])
-  const [plan, setPlan] = React.useState<PlanSnapshotView | null>(null)
 
   // participantId -> display name, used to label reactors in `reaction:update`
   // nudges (which carry only the id). Seeded from history + the members list,
@@ -143,41 +156,13 @@ export function ChatPanel({
     }
   }, [roomId, session.sessionToken])
 
-  const loadPlan = React.useCallback(async () => {
-    try {
-      const res = await fetch(`/api/rooms/${roomId}/plan`, {
-        headers: { Authorization: `Bearer ${session.sessionToken}` },
-      })
-      if (res.status === 204) {
-        setPlan(null)
-        return
-      }
-      if (!res.ok) return
-      const data: PlanSnapshotView = await res.json()
-      setPlan(data)
-    } catch {
-      // Non-fatal: the results card simply doesn't render.
-    }
-  }, [roomId, session.sessionToken])
-
   React.useEffect(() => {
     void loadMembers()
-    // loadHistory/loadPlan setState only after their awaits resolve, not
-    // synchronously in the effect body, so they don't cascade renders.
+    // loadHistory setState()s only after its await resolves, not synchronously
+    // in the effect body, so it doesn't cascade renders.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadHistory()
-    void loadPlan()
-  }, [loadMembers, loadHistory, loadPlan])
-
-  // When a run finishes, refetch the plan (the finalize task also fires a
-  // `plan:updated` nudge handled below; both call loadPlan, but this ref dedupes
-  // a given completed run so it can't double-fetch on repeated renders).
-  const refetchedRunRef = React.useRef<string | null>(null)
-  React.useEffect(() => {
-    if (!completedRunId || refetchedRunRef.current === completedRunId) return
-    refetchedRunRef.current = completedRunId
-    void loadPlan()
-  }, [completedRunId, loadPlan])
+  }, [loadMembers, loadHistory])
 
   // Append a durable message, replacing a matching optimistic placeholder and
   // deduping by id (the sender sees both the action's return and its own
@@ -233,8 +218,6 @@ export function ChatPanel({
             : m
         )
       )
-    } else if (event.type === "plan:updated") {
-      void loadPlan()
     }
   })
 
@@ -293,6 +276,12 @@ export function ChatPanel({
           messages={messages}
           myParticipantId={session.participantId}
           plan={plan}
+          replanning={replanning}
+          updateFailed={updateFailed}
+          updatingLabel={updatingLabel}
+          votes={votes}
+          myVotes={myVotes}
+          decision={decision}
           agent={agent}
           onFocus={onFocusCandidate}
           onVenuePreview={onVenuePreview}

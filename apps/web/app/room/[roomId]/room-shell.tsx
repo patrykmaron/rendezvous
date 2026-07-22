@@ -47,6 +47,7 @@ import {
   useSurfaceCursor,
 } from "@/components/presence/cursor-overlay"
 import { useAgentToasts } from "@/hooks/use-agent-toasts"
+import { usePlan } from "@/hooks/use-plan"
 import { isFinalStatus, useRoomAgent } from "@/hooks/use-room-agent"
 import { PARTICIPANT_COLORS } from "@/lib/colors"
 import { candidateVenuePins } from "@/lib/plan-utils"
@@ -354,12 +355,29 @@ function RoomView({
     lastRun: agent.lastRun,
     status: agent.status,
   })
-  // The newest run's id once it has reached a final status — handed to the chat
-  // panel to trigger an authoritative plan refetch on completion.
+  // The newest run's id once it has reached a final status — feeds usePlan to
+  // trigger an authoritative plan refetch on completion.
   const completedRunId =
     agent.lastRun && isFinalStatus(agent.lastRun.status)
       ? agent.lastRun.id
       : undefined
+
+  // Plan state is owned here (not in ChatPanel) so the chat panel and the
+  // map-pane surfaces read one source. The hook fetches PlanResponse and folds
+  // in plan:updated / vote:update / decided:update nudges (ADR 0014/0015).
+  const planState = usePlan(
+    roomId,
+    session.sessionToken,
+    completedRunId,
+    session.participantId
+  )
+  // Why a re-plan is in flight. The `auto_constraints` source rides the run's
+  // trigger-time metadata and is wired in a later phase; until then a re-plan is
+  // always a manual re-run, so the label is the generic one.
+  const updatingLabel =
+    agent.activeRun?.metadata?.source === "auto_constraints"
+      ? "Rethinking with your new preferences…"
+      : "Updating the plan…"
 
   // Fold the agent's map overlay into the shared overlay state whenever it
   // changes (its identity is content-stable — see useRoomAgent). A manual
@@ -797,7 +815,13 @@ function RoomView({
               timeline: agent.timeline,
               isActive: agent.isActive,
             }}
-            completedRunId={completedRunId}
+            plan={planState.data?.plan ?? null}
+            replanning={planState.replanning}
+            updateFailed={planState.updateFailed}
+            updatingLabel={updatingLabel}
+            votes={planState.data?.votes ?? []}
+            myVotes={planState.data?.myVotes ?? []}
+            decision={planState.data?.decision ?? null}
             onFocusCandidate={focusCandidate}
             onVenuePreview={handleVenuePreview}
           />

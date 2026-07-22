@@ -7,7 +7,13 @@ import { MessageGroup } from "@workspace/ui/components/message"
 import { ScrollArea } from "@workspace/ui/components/scroll-area"
 
 import type { ChatAgentActivity } from "@/hooks/use-room-agent"
-import type { ChatMessage, PlanCandidate, PlanSnapshotView } from "@/lib/types"
+import type {
+  ChatMessage,
+  PlanCandidate,
+  PlanSnapshotView,
+  RoomDecision,
+  VoteTally,
+} from "@/lib/types"
 
 import { AgentActivity } from "./agent-activity"
 import { MessageItem } from "./message-item"
@@ -44,6 +50,12 @@ export function MessageList({
   messages,
   myParticipantId,
   plan,
+  replanning,
+  updateFailed,
+  updatingLabel,
+  votes,
+  myVotes,
+  decision,
   agent,
   onFocus,
   onVenuePreview,
@@ -52,6 +64,12 @@ export function MessageList({
   messages: ChatMessage[]
   myParticipantId: string
   plan: PlanSnapshotView | null
+  replanning: boolean
+  updateFailed: boolean
+  updatingLabel: string
+  votes: VoteTally[]
+  myVotes: string[]
+  decision: RoomDecision | null
   agent: ChatAgentActivity
   onFocus: (candidate: PlanCandidate) => void
   onVenuePreview: (candidate: PlanCandidate, venueIndex: number) => void
@@ -166,6 +184,12 @@ export function MessageList({
           {plan ? (
             <PlanCard
               plan={plan}
+              replanning={replanning}
+              updateFailed={updateFailed}
+              updatingLabel={updatingLabel}
+              votes={votes}
+              myVotes={myVotes}
+              decision={decision}
               onFocus={onFocus}
               onVenuePreview={onVenuePreview}
             />
