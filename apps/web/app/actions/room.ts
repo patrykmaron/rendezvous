@@ -179,7 +179,21 @@ export async function joinRoom(
         if (!inserted) {
           throw new Error("joinRoom: failed to insert participant")
         }
-        await tx.insert(roomMembers).values({ roomId, participantId })
+        // The first member to join is the host. Race-free: withRoomRevision's
+        // UPDATE ... RETURNING has row-locked this room, serializing concurrent
+        // joiners, so at most one sees an empty membership. Existing rooms
+        // predate this and have no host row — resolveHostId falls back to the
+        // earliest joiner for them (see lib/host.ts).
+        const [existingMember] = await tx
+          .select({ participantId: roomMembers.participantId })
+          .from(roomMembers)
+          .where(eq(roomMembers.roomId, roomId))
+          .limit(1)
+        await tx.insert(roomMembers).values({
+          roomId,
+          participantId,
+          ...(existingMember ? {} : { role: "host" as const }),
+        })
         return inserted
       },
     })
