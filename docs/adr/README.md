@@ -24,6 +24,7 @@ An ADR is immutable once accepted: if a decision is reversed or refined, a new A
 | [0014](0014-realtime-broadcasts-and-session-identity.md) | Full-payload Liveblocks broadcasts and sessionStorage identity for the realtime frontend | Accepted |
 | [0015](0015-room-agent-openai-tool-loop.md)              | OpenAI Responses tool loop orchestrates the room agent inside Trigger.dev                | Accepted |
 | [0016](0016-mapbox-gl-for-the-map-surface.md)            | Mapbox GL (via react-map-gl) for the shared map surface                                  | Accepted |
+| [0017](0017-mapbox-standard-style-3d-orbit.md)            | Mapbox Standard style (3D) with theme→lightPreset and a Shard attract-mode orbit         | Accepted |
 
 ## Adding an ADR
 

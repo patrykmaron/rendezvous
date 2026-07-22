@@ -25,18 +25,25 @@ import { Button } from "@workspace/ui/components/button"
 import { setOrigin } from "@/app/actions/origin"
 import type { MapOverlay, OriginPoint } from "@/lib/types"
 
+import { useOrbit, type OrbitPoint } from "./use-orbit"
+
 // Publicly-inlined at build (NEXT_PUBLIC_*); a client component may read it.
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN
 
-// Central London (Charing Cross), zoomed to show most of the city.
+// The Shard, pitched for its 3D mesh — the room's attract-mode default before
+// any origins have loaded (origins arrive async; this is a handoff, not a
+// correction, so we always start here rather than a flatter "safe" view).
+// Fallback if The Shard's 3D mesh turns out to be absent in Standard:
+// { longitude: -0.088, latitude: 51.507, zoom: 14.6, pitch: 60 } (Tower Bridge / City skyline)
 const INITIAL_VIEW_STATE = {
-  longitude: -0.1276,
-  latitude: 51.5072,
-  zoom: 11,
+  longitude: -0.0865,
+  latitude: 51.5045,
+  zoom: 15.7,
+  pitch: 62,
+  bearing: -30,
 } as const
 
-const DARK_STYLE = "mapbox://styles/mapbox/dark-v11"
-const LIGHT_STYLE = "mapbox://styles/mapbox/light-v11"
+const STANDARD_STYLE = "mapbox://styles/mapbox/standard"
 
 // Defined once, OUTSIDE the component: react-map-gl shallow-diffs style props
 // on every render, so an inline object would rebuild the layer each time. The
@@ -50,6 +57,9 @@ const ROUTE_LAYER: LayerProps = {
     "line-width": 3,
     "line-opacity": 0.85,
   },
+  // Above land/water, below 3D buildings + labels. Drop if 3D-building
+  // occlusion of route lines looks bad against Standard's building layer.
+  slot: "middle",
 }
 
 // How often a moving cursor is published to presence (ms). Cheap and smooth
@@ -131,6 +141,29 @@ export function RoomMap({
   const mapRef = React.useRef<MapRef>(null)
   const { resolvedTheme } = useTheme()
   const dark = resolvedTheme === "dark"
+
+  // Standard's light preset is a basemap import-config property, not a style
+  // prop react-map-gl diffs on `<Map>` — flip it imperatively so the theme
+  // toggle never reloads the whole style. `mapStyle` below stays constant.
+  React.useEffect(() => {
+    mapRef.current?.setConfigProperty(
+      "basemap",
+      "lightPreset",
+      dark ? "dusk" : "day"
+    )
+  }, [dark])
+
+  // With `reuseMaps`, the underlying GL instance can be recycled from a
+  // previous mount and carry a stale config — re-apply once the (possibly
+  // reused) map is ready, so the correct preset always wins over whatever it
+  // had before.
+  const handleMapLoad = React.useCallback(() => {
+    mapRef.current?.setConfigProperty(
+      "basemap",
+      "lightPreset",
+      dark ? "dusk" : "day"
+    )
+  }, [dark])
 
   const self = useSelf()
   const myName = self?.info.name ?? "You"
@@ -216,7 +249,12 @@ export function RoomMap({
   // set, so this recomputes (and the effect re-fits) only when origins/pins
   // actually change — cursor re-renders leave the memo identity stable.
   // Skipped for fewer than two points: a single origin would zoom absurdly far.
-  const { box: boundsBox, count: boundsCount } = React.useMemo(() => {
+  // `singlePoint` is the one-point case, handed to useOrbit for its handoff fly.
+  const {
+    box: boundsBox,
+    count: boundsCount,
+    singlePoint,
+  } = React.useMemo(() => {
     const points: Array<[number, number]> = []
     for (const o of originsToRender) points.push([o.lng, o.lat])
     for (const p of overlay.pins) points.push([p.lng, p.lat])
@@ -237,13 +275,35 @@ export function RoomMap({
         [maxLng, maxLat],
       ] as [[number, number], [number, number]],
       count: points.length,
+      singlePoint:
+        points.length === 1
+          ? ({ lng: points[0]![0], lat: points[0]![1] } satisfies OrbitPoint)
+          : null,
     }
   }, [originsToRender, overlay.pins])
+
+  // The room has something to show once any origin, overlay pin, or agent
+  // focus exists — drives when the attract-mode orbit stops (see useOrbit).
+  const hasData =
+    originsToRender.length > 0 ||
+    overlay.pins.length > 0 ||
+    overlay.focus != null
+
+  // Must run before the fitBounds/focus effects below: the orbit cancels its
+  // rAF loop in the same commit that delivers real data, so those effects
+  // always take over an unclaimed camera rather than fighting the orbit for it.
+  useOrbit(mapRef, { hasData, settingOrigin, singlePoint })
 
   React.useEffect(() => {
     const map = mapRef.current
     if (!map || boundsCount < 2) return
-    map.fitBounds(boundsBox, { padding: 60, maxZoom: 14, duration: 800 })
+    map.fitBounds(boundsBox, {
+      padding: 60,
+      maxZoom: 14,
+      duration: 1200,
+      pitch: 45,
+      bearing: 0,
+    })
   }, [boundsBox, boundsCount])
 
   // Fly to an agent-requested focus point when it changes.
@@ -276,8 +336,12 @@ export function RoomMap({
         mapboxAccessToken={MAPBOX_TOKEN}
         initialViewState={INITIAL_VIEW_STATE}
         style={{ width: "100%", height: "100%" }}
-        mapStyle={dark ? DARK_STYLE : LIGHT_STYLE}
+        mapStyle={STANDARD_STYLE}
+        antialias
+        config={{ basemap: { lightPreset: dark ? "dusk" : "day" } }}
+        maxPitch={85}
         cursor={settingOrigin ? "crosshair" : undefined}
+        onLoad={handleMapLoad}
         onMouseMove={handleMouseMove}
         onMouseLeave={handleMouseLeave}
         onClick={handleMapClick}
