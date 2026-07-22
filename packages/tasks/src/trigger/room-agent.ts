@@ -118,6 +118,9 @@ const roomAgentPayload = z.object({
   analysisId: z.uuid(),
   triggerMessageId: z.uuid().optional(),
   participantId: z.uuid(),
+  // WHY this run exists — re-emitted as run metadata below so the client can
+  // label the "Updating…" badge. See RoomAgentPayload in room-agent.types.ts.
+  source: z.string().optional(),
 })
 
 // ---------------------------------------------------------------------------
@@ -527,8 +530,19 @@ export const roomAgentTask = schemaTask({
   schema: roomAgentPayload,
   retry: { maxAttempts: 1 },
   maxDuration: 900,
-  run: async ({ roomId, analysisId, triggerMessageId, participantId }) => {
+  run: async ({ roomId, analysisId, triggerMessageId, participantId, source }) => {
     void participantId // triggering actor; reserved for future attribution.
+
+    // Surface WHY this run exists (auto_constraints / auto_event_time / manual)
+    // as run metadata so the client can label the "Updating…" badge. The
+    // auto-replan twin (lib/start-analysis.ts) also sets this as trigger-time run
+    // metadata; re-emitting it from the payload here means a caller that passes
+    // `source` only in the payload still reaches the client, and is a no-op when
+    // it's absent. metadata is per-key, so the setStatus writes below (which set
+    // the "status" key) never clobber it.
+    if (source) {
+      metadata.set("source", source)
+    }
 
     // Durable assistant message + live nudge. Bumps the room revision and
     // appends a message_sent event in one transaction (ADR 0007).

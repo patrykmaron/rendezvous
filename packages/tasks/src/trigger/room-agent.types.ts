@@ -14,6 +14,12 @@ export type RoomAgentPayload = {
   analysisId: string
   triggerMessageId?: string
   participantId: string
+  // WHY this run exists (e.g. "auto_constraints", "auto_event_time"). Optional:
+  // the manual @agent/button path omits it, and the web `startAnalysis`
+  // event-time path passes it only as trigger-time run metadata. The auto-replan
+  // twin (lib/start-analysis.ts) passes it here too so the run re-emits it via
+  // `metadata.set("source", …)` for the client's "Updating…" badge.
+  source?: string
 }
 
 export type RoomAgentOutput =

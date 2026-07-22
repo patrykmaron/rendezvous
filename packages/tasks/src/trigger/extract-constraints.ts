@@ -6,6 +6,7 @@ import OpenAI from "openai"
 import { z } from "zod"
 
 import { broadcastRoomEvent } from "../lib/liveblocks"
+import { maybeStartAutoReplan } from "../lib/start-analysis"
 import { EXTRACTOR_MODEL } from "./agent/model"
 
 // The planning-constraint taxonomy (mirror of apps/web/lib/types.ts
@@ -382,6 +383,39 @@ export const extractConstraintsTask = schemaTask({
             ...(author ? { author } : {}),
           })
         }
+      }
+    }
+
+    // Auto re-plan (ADR 0021): any net constraint change after a completed plan
+    // makes the agent rethink automatically. Best-effort — a failure here must
+    // NEVER change extraction's result or fail the run.
+    //
+    // Loop-safety invariant chain (verified against current code — each link
+    // holds, so this can never recurse):
+    //   1. Extraction is triggered ONLY by `sendMessage`
+    //      (apps/web/app/actions/chat.ts:106), which inserts ONLY `role:"user"`
+    //      rows authored by an authenticated participant. The agent's
+    //      `postAssistantMessage` (room-agent.ts) and web's `postSystemMessage`
+    //      (agent-trigger.ts) insert assistant/system rows directly and never
+    //      call `queueConstraintExtraction`. → assistant/system messages can
+    //      never cause extraction.
+    //   2. Auto-replan is triggered ONLY here, ONLY on a net constraint change
+    //      (`added + removed > 0`), at most once per run (single call site;
+    //      task is `maxAttempts:1`), and behind guards 0-4 in maybeStartAutoReplan.
+    //   3. A `room-agent` run writes assistant messages, plan_snapshots, and
+    //      room events — it NEVER writes `constraints` (verified: no
+    //      `insert(constraints)` in room-agent.ts). → a replan changes no
+    //      constraints → cannot cause extraction (link 1) → cannot cause another
+    //      replan (link 2). The chain terminates in one hop; the 30s cooldown +
+    //      running-snapshot guard bound even an adversarial message flood to
+    //      ~1 run per run-duration.
+    if (added + removed > 0) {
+      try {
+        await maybeStartAutoReplan({ roomId, participantId, triggerMessageId: messageId })
+      } catch (err) {
+        logger.warn("extract-constraints: auto-replan failed (non-fatal)", {
+          error: String(err),
+        })
       }
     }
 
