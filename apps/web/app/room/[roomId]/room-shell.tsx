@@ -42,6 +42,10 @@ import { cellToLatLng, isValidCell } from "h3-js"
 import { askAgent } from "@/app/actions/agent"
 import { changeColor, joinRoom } from "@/app/actions/room"
 import { ChatPanel } from "@/components/chat/chat-panel"
+import {
+  CursorOverlay,
+  useSurfaceCursor,
+} from "@/components/presence/cursor-overlay"
 import { useAgentToasts } from "@/hooks/use-agent-toasts"
 import { isFinalStatus, useRoomAgent } from "@/hooks/use-room-agent"
 import { PARTICIPANT_COLORS } from "@/lib/colors"
@@ -267,6 +271,21 @@ function RoomView({
   const self = useSelf()
   const others = useOthers()
   const updateMyPresence = useUpdateMyPresence()
+
+  // Figma-style live cursors on the header and chat panel (the map has its
+  // own geo-anchored version — see room-map.tsx). Both hooks require a
+  // RoomProvider ancestor, which RoomView is.
+  const headerCursor = useSurfaceCursor("header")
+  const chatCursor = useSurfaceCursor("chat")
+
+  // Alt-tabbing away shouldn't leave a stale cursor parked on a surface.
+  React.useEffect(() => {
+    function handleBlur() {
+      updateMyPresence({ cursor: null })
+    }
+    window.addEventListener("blur", handleBlur)
+    return () => window.removeEventListener("blur", handleBlur)
+  }, [updateMyPresence])
 
   const [colorOpen, setColorOpen] = React.useState(false)
   const [colorError, setColorError] = React.useState<string | null>(null)
@@ -535,7 +554,11 @@ function RoomView({
 
   return (
     <div className="flex h-svh flex-col bg-background">
-      <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border px-4">
+      <header
+        className="relative flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border px-4"
+        onPointerMove={headerCursor.onPointerMove}
+        onPointerLeave={headerCursor.onPointerLeave}
+      >
         <div className="flex min-w-0 items-center gap-2">
           <MapPinIcon
             className="size-4 shrink-0 text-muted-foreground"
@@ -652,6 +675,7 @@ function RoomView({
             )
           })()}
         </div>
+        <CursorOverlay surface="header" />
       </header>
 
       <main className="flex min-h-0 flex-1">
@@ -675,8 +699,13 @@ function RoomView({
           className={cn(
             "fixed inset-x-0 top-14 bottom-0 z-30 flex flex-col border-t border-border bg-background transition-transform duration-200 ease-out",
             chatOpen ? "translate-y-0" : "pointer-events-none translate-y-full",
-            "md:pointer-events-auto md:static md:inset-auto md:z-auto md:h-full md:w-[380px] md:shrink-0 md:translate-y-0 md:border-t-0 md:border-l"
+            // `md:relative` (not `md:static`): CursorOverlay below is
+            // absolutely positioned and needs this as its containing block on
+            // desktop, or it'd resolve against the viewport instead.
+            "md:pointer-events-auto md:relative md:inset-auto md:z-auto md:h-full md:w-[380px] md:shrink-0 md:translate-y-0 md:border-t-0 md:border-l"
           )}
+          onPointerMove={chatCursor.onPointerMove}
+          onPointerLeave={chatCursor.onPointerLeave}
         >
           <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-4 text-muted-foreground">
             <ChatCircleDotsIcon className="size-4" />
@@ -705,6 +734,7 @@ function RoomView({
             completedRunId={completedRunId}
             onFocusCandidate={focusCandidate}
           />
+          <CursorOverlay surface="chat" />
         </aside>
 
         {!chatOpen ? (
@@ -808,7 +838,7 @@ export function RoomShell({
 
   return (
     <LiveblocksProvider
-      throttle={100}
+      throttle={16}
       authEndpoint={async (room) => {
         const res = await fetch("/api/liveblocks-auth", {
           method: "POST",

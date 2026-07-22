@@ -23,6 +23,7 @@ import "mapbox-gl/dist/mapbox-gl.css"
 import { Button } from "@workspace/ui/components/button"
 
 import { setOrigin } from "@/app/actions/origin"
+import { LiveCursor } from "@/components/presence/live-cursor"
 import type { MapOverlay, OriginPoint } from "@/lib/types"
 
 import { useOrbit, type OrbitPoint } from "./use-orbit"
@@ -62,10 +63,6 @@ const ROUTE_LAYER: LayerProps = {
   slot: "middle",
 }
 
-// How often a moving cursor is published to presence (ms). Cheap and smooth
-// without flooding the realtime channel.
-const CURSOR_THROTTLE_MS = 50
-
 function initialOf(name: string): string {
   return name.trim().charAt(0).toUpperCase() || "?"
 }
@@ -90,17 +87,6 @@ function OriginMarker({ name, color }: { name: string; color: string }) {
         }}
       />
     </div>
-  )
-}
-
-/** Another participant's live cursor: a small, translucent coloured dot. */
-function CursorDot({ color, name }: { color?: string; name?: string }) {
-  return (
-    <div
-      className="size-2.5 rounded-full ring-1 ring-white/50"
-      style={{ backgroundColor: color ?? "#888", opacity: 0.6 }}
-      title={name}
-    />
   )
 }
 
@@ -206,15 +192,17 @@ export function RoomMap({
     ]
   }, [origins, localOrigin, session.participantId, session.color, myName])
 
-  // Publish my own cursor as I move, throttled; clear it when I leave the map.
-  const lastCursorSent = React.useRef(0)
+  // Publish my own cursor as I move; clear it when I leave the map. No manual
+  // throttle needed — Liveblocks coalesces presence writes to the provider's
+  // `throttle` interval.
   const handleMouseMove = React.useCallback(
     (event: MapMouseEvent) => {
-      const now = Date.now()
-      if (now - lastCursorSent.current < CURSOR_THROTTLE_MS) return
-      lastCursorSent.current = now
       updateMyPresence({
-        cursor: { lng: event.lngLat.lng, lat: event.lngLat.lat },
+        cursor: {
+          surface: "map",
+          lng: event.lngLat.lng,
+          lat: event.lngLat.lat,
+        },
       })
     },
     [updateMyPresence]
@@ -384,14 +372,15 @@ export function RoomMap({
         ))}
 
         {cursors.map(([connectionId, data]) =>
-          data.cursor ? (
+          data.cursor?.surface === "map" ? (
             <Marker
               key={connectionId}
               longitude={data.cursor.lng}
               latitude={data.cursor.lat}
-              anchor="center"
+              anchor="top-left"
+              style={{ pointerEvents: "none" }}
             >
-              <CursorDot color={data.color} name={data.name} />
+              <LiveCursor color={data.color} name={data.name ?? "Guest"} />
             </Marker>
           ) : null
         )}

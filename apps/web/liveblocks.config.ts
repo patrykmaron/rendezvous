@@ -6,10 +6,20 @@ import type { ChatMessage, ReactionUpdate } from "@/lib/types"
 // Postgres). The `declare global` block below types every hook in
 // @liveblocks/react and every broadcast from @liveblocks/node across the app.
 
+// Live cursor position, tagged by which surface it's on. `map` is a shared
+// geographic space (lng/lat). The other surfaces normalise to 0..1 against
+// that surface's own bounding rect, so a chat cursor always renders inside
+// the recipient's chat panel regardless of window size — null when off any
+// tracked surface.
+export type CursorPresence =
+  | { surface: "map"; lng: number; lat: number }
+  | { surface: "chat"; x: number; y: number }
+  | { surface: "header"; x: number; y: number }
+  | null
+
 // What each connected client continuously publishes about itself.
 export type RoomPresence = {
-  // Live cursor on the map, or null when off-canvas.
-  cursor: { lng: number; lat: number } | null
+  cursor: CursorPresence
   isTyping: boolean
   // Mirrors the participant's authoritative colour so others can recolour
   // instantly on a change without waiting for a refetch.
