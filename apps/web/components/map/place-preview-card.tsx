@@ -7,18 +7,14 @@ import { StarIcon } from "@phosphor-icons/react/dist/csr/Star"
 
 import { cn } from "@workspace/ui/lib/utils"
 
-import type { PlacePreview, PlacePreviewResponse } from "@/lib/place-preview"
+import { usePlacePreview } from "@/hooks/use-place-preview"
+import type { PlacePreview } from "@/lib/place-preview"
 import type { PlacePreviewTarget } from "@/lib/types"
 
 // Flat, bordered container matching plan-card's visual language (no rounded
 // corners) — see apps/web/components/chat/plan-card.tsx.
 const CONTAINER_CLASS =
   "w-64 border border-border bg-card text-card-foreground shadow-lg"
-
-type LoadState =
-  | { kind: "loading" }
-  | { kind: "ok"; place: PlacePreview }
-  | { kind: "unavailable" }
 
 function CategoryChip({ category }: { category?: string }) {
   if (!category) return null
@@ -175,56 +171,11 @@ export function PlacePreviewCard({
   roomId: string
   sessionToken: string
 }) {
-  const [state, setState] = React.useState<LoadState>({ kind: "loading" })
+  // A popup always has a target and should render immediately, so no debounce.
+  const state = usePlacePreview(target, roomId, sessionToken, { debounceMs: 0 })
 
-  React.useEffect(() => {
-    const controller = new AbortController()
-    // Resets the card to its skeleton state whenever `target` changes, before
-    // the fetch below resolves.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setState({ kind: "loading" })
-
-    const params = new URLSearchParams({
-      roomId,
-      name: target.name,
-      lat: String(target.lat),
-      lng: String(target.lng),
-    })
-    // Prefer the exact Google-id lookup when we have it (ADR 0020); `fsq` still
-    // travels for the Text Search fallback / cache-key when there's no gp.
-    if (target.googlePlaceId) params.set("gp", target.googlePlaceId)
-    if (target.fsqPlaceId) params.set("fsq", target.fsqPlaceId)
-
-    fetch(`/api/places/preview?${params.toString()}`, {
-      headers: { Authorization: `Bearer ${sessionToken}` },
-      signal: controller.signal,
-    })
-      .then((res) =>
-        res.ok ? (res.json() as Promise<PlacePreviewResponse>) : null
-      )
-      .then((data) => {
-        setState(
-          data?.ok ? { kind: "ok", place: data.place } : { kind: "unavailable" }
-        )
-      })
-      .catch((err) => {
-        if (err instanceof DOMException && err.name === "AbortError") return
-        setState({ kind: "unavailable" })
-      })
-
-    return () => controller.abort()
-  }, [
-    roomId,
-    sessionToken,
-    target.id,
-    target.name,
-    target.lat,
-    target.lng,
-    target.fsqPlaceId,
-    target.googlePlaceId,
-  ])
-
-  if (state.kind === "loading") return <SkeletonCard />
+  if (state.kind === "ok") return <PlaceCard place={state.place} target={target} />
   if (state.kind === "unavailable") return <FallbackCard target={target} />
-  return <PlaceCard place={state.place} target={target} />
+  // idle (target present so effectively transient) / loading → skeleton.
+  return <SkeletonCard />
 }
