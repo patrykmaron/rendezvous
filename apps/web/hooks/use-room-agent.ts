@@ -98,10 +98,14 @@ export type RoomAgentState = {
  *
  * Fetches a room-scoped realtime token (cached in memory, refetched on error /
  * every ~50min), then uses it to subscribe to every `room:<id>`-tagged run and
- * to the active run's `agent` token stream. Derives the active/last run, the
- * live status, the map overlay, the timeline, routing progress, and the
- * streamed assistant text — everything the shell needs to render agent
- * activity. Read-only: triggering happens through the `askAgent` action.
+ * to the active run's `agent` token stream. The `room:<id>` tag is shared with
+ * the always-listening extract-constraints runs (see agent-trigger.ts), so all
+ * derivations below run against `agentRuns` — the subscription filtered down to
+ * the `room-agent` orchestrator by task id — never the raw tag feed. Derives
+ * the active/last run, the live status, the map overlay, the timeline, routing
+ * progress, and the streamed assistant text — everything the shell needs to
+ * render agent activity. Read-only: triggering happens through the `askAgent`
+ * action.
  */
 export function useRoomAgent(
   roomId: string,
@@ -161,10 +165,20 @@ export function useRoomAgent(
     void fetchToken()
   }, [runsError, token, fetchToken])
 
+  // The `room:<id>` tag is shared: queueConstraintExtraction tags every
+  // extract-constraints run `room:<id>` as well (harmless — useful in the
+  // Trigger dashboard). Filter the subscription to the orchestrator by task id
+  // BEFORE any downstream selection, so an extraction run can never become the
+  // activeRun/lastRun and thus never drives a false "Agent is working…" toast,
+  // a spurious plan refetch, an overlay/status read, or a stuck-QUEUED loading
+  // toast when the worker is down. `taskIdentifier` is the RunShape field (see
+  // @trigger.dev/core runStream.d.ts: `taskIdentifier: TRunTypes[...]`).
   // Newest-first so "latest" derivations are index 0.
   const sortedRuns = React.useMemo(
     () =>
-      [...runs].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()),
+      runs
+        .filter((r) => r.taskIdentifier === "room-agent")
+        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()),
     [runs]
   )
   const lastRun = sortedRuns[0]

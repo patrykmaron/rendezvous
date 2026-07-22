@@ -133,6 +133,13 @@ export function RoomMap({
   onPreviewChange: (preview: PlacePreviewTarget | null) => void
 }) {
   const mapRef = React.useRef<MapRef>(null)
+  // react-map-gl creates the GL instance asynchronously (a dynamic
+  // `import('mapbox-gl')` resolves a commit or more after mount), so
+  // `mapRef.current` is null on the first render(s). This React state — set in
+  // the `onLoad` handler below — is the signal the camera effects (orbit,
+  // fitBounds, focus flyTo) key on, because a ref read never retriggers an
+  // effect and the instance can appear late on a slower production load.
+  const [mapLoaded, setMapLoaded] = React.useState(false)
   const { resolvedTheme } = useTheme()
   const dark = resolvedTheme === "dark"
 
@@ -157,6 +164,9 @@ export function RoomMap({
       "lightPreset",
       dark ? "dusk" : "day"
     )
+    // Flip the state the camera effects key on. Safe to call on every (reused)
+    // load — setState bails when the value is unchanged.
+    setMapLoaded(true)
   }, [dark])
 
   const self = useSelf()
@@ -293,11 +303,14 @@ export function RoomMap({
   // Must run before the fitBounds/focus effects below: the orbit cancels its
   // rAF loop in the same commit that delivers real data, so those effects
   // always take over an unclaimed camera rather than fighting the orbit for it.
-  useOrbit(mapRef, { hasData, settingOrigin, singlePoint })
+  useOrbit(mapRef, { hasData, settingOrigin, singlePoint, mapLoaded })
 
+  // `mapLoaded` is in the deps (and the guard) so origins/pins that resolved
+  // BEFORE the async map instance existed still fit once it loads — reading
+  // `mapRef.current` alone would silently no-op on that first pass.
   React.useEffect(() => {
     const map = mapRef.current
-    if (!map || boundsCount < 2) return
+    if (!mapLoaded || !map || boundsCount < 2) return
     map.fitBounds(boundsBox, {
       padding: 60,
       maxZoom: 14,
@@ -305,21 +318,23 @@ export function RoomMap({
       pitch: 45,
       bearing: 0,
     })
-  }, [boundsBox, boundsCount])
+  }, [boundsBox, boundsCount, mapLoaded])
 
-  // Fly to an agent-requested focus point when it changes.
+  // Fly to an agent-requested focus point when it changes (or once the map
+  // loads, for a focus that resolved before the instance existed).
   const focusLat = overlay.focus?.lat
   const focusLng = overlay.focus?.lng
   const focusZoom = overlay.focus?.zoom
   React.useEffect(() => {
     const map = mapRef.current
-    if (!map || focusLat === undefined || focusLng === undefined) return
+    if (!mapLoaded || !map || focusLat === undefined || focusLng === undefined)
+      return
     map.flyTo({
       center: [focusLng, focusLat],
       zoom: focusZoom ?? map.getZoom(),
       duration: 800,
     })
-  }, [focusLat, focusLng, focusZoom])
+  }, [focusLat, focusLng, focusZoom, mapLoaded])
 
   if (!MAPBOX_TOKEN) {
     return (

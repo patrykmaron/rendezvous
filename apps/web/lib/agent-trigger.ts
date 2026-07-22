@@ -169,6 +169,10 @@ export async function queueConstraintExtraction(opts: {
   content: string
 }): Promise<void> {
   const { roomId, messageId, participantId, content } = opts
+  // Extraction runs SHARE the `room:<id>` tag with the room-agent orchestrator
+  // so the room's scoped realtime token can observe them in the dashboard.
+  // Harmless to the agent UI: useRoomAgent filters the tag subscription down to
+  // `taskIdentifier === "room-agent"`, so these runs never drive its state.
   await tasks.trigger<ExtractConstraintsTask>(
     "extract-constraints",
     { roomId, messageId, participantId, content },
