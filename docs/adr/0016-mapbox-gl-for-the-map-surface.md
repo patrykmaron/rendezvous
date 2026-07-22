@@ -1,6 +1,6 @@
 # 0016. Mapbox GL for the shared map surface
 
-**Status:** Accepted
+**Status:** Accepted — theme-swap mechanism amended by [0017](0017-mapbox-standard-style-3d-orbit.md)
 **Date:** 2026-07-21
 
 ## Context
