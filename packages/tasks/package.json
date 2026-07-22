@@ -8,14 +8,14 @@
     "./trigger/room-agent.types": "./src/trigger/room-agent.types.ts"
   },
   "devDependencies": {
-    "@trigger.dev/build": "4.5.5",
+    "@trigger.dev/build": "4.5.6",
     "@types/node": "^20",
     "@workspace/typescript-config": "workspace:*",
     "typescript": "^5.9.2"
   },
   "dependencies": {
     "@liveblocks/node": "^3.22.0",
-    "@trigger.dev/sdk": "4.5.5",
+    "@trigger.dev/sdk": "4.5.6",
     "@workspace/db": "workspace:*",
     "h3-js": "^4.5.0",
     "openai": "^6.48.0",
