@@ -56,6 +56,14 @@ export const planCandidate = z.object({
       lng: z.number(),
       category: z.string().optional(),
       fsqPlaceId: z.string().optional(),
+      // Google Places liveness fields (ADR 0020). All optional so pre-F plan
+      // snapshots parse — mirror of Venue in get-venues.ts and PlanCandidate in
+      // apps/web/lib/types.ts.
+      googlePlaceId: z.string().optional(),
+      verified: z.boolean().optional(),
+      source: z.enum(["foursquare", "google"]).optional(),
+      rating: z.number().optional(),
+      userRatingCount: z.number().optional(),
     })
   ),
 })

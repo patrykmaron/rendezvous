@@ -83,6 +83,9 @@ type OverlayPin = {
   // snapshots and model-painted pins (show_map's strict schema has no
   // placeId field) still parse.
   placeId?: string
+  // Google Places id (venue pins only) — when present the preview route can
+  // GET the place directly (cheaper, exact) instead of Text Search (ADR 0020).
+  googlePlaceId?: string
 }
 type OverlayRoutes = {
   type: "FeatureCollection"
@@ -237,6 +240,7 @@ Rules:
 - Never paste tables, or lists of numbers, times, or scores into the chat — put results on the map instead.
 - Always reveal results by calling show_map; the chat is only a short, friendly summary.
 - Respect "must" constraints when choosing venues; treat "nice-to-have" as preferences.
+- Venues in tool results carry \`verified\`/\`rating\` — prefer verified venues, and you may mention a standout rating (e.g. 4.6★) in your summary.
 
 Workflow — call the tools in this order:
 1. generate_candidates — find candidate meeting areas from everyone's start points.
@@ -956,7 +960,18 @@ function assemblePlanResult(
         lat: v.lat,
         lng: v.lng,
         ...(v.category ? { category: v.category } : {}),
-        fsqPlaceId: v.fsqPlaceId,
+        ...(v.fsqPlaceId ? { fsqPlaceId: v.fsqPlaceId } : {}),
+        // Google Places liveness fields (ADR 0020) — threaded through so the
+        // plan card / preview flow can use the exact id, rating, and verified
+        // badge. Each omitted when absent (backfilled venues have no fsq id;
+        // unverified venues have no verified flag).
+        ...(v.googlePlaceId ? { googlePlaceId: v.googlePlaceId } : {}),
+        ...(v.verified !== undefined ? { verified: v.verified } : {}),
+        ...(v.source ? { source: v.source } : {}),
+        ...(typeof v.rating === "number" ? { rating: v.rating } : {}),
+        ...(typeof v.userRatingCount === "number"
+          ? { userRatingCount: v.userRatingCount }
+          : {}),
       })),
     }
   })
@@ -999,6 +1014,7 @@ function publishFinalOverlay(
       kind: "venue",
       label: v.name,
       ...(v.fsqPlaceId ? { placeId: v.fsqPlaceId } : {}),
+      ...(v.googlePlaceId ? { googlePlaceId: v.googlePlaceId } : {}),
     })
   })
 
