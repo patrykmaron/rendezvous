@@ -2,12 +2,13 @@ import "server-only"
 
 import { tasks } from "@trigger.dev/sdk"
 
-import { eq, getDb, sql } from "@workspace/db/postgres"
+import { and, desc, eq, getDb, sql } from "@workspace/db/postgres"
 import { withRoomRevision } from "@workspace/db/revision"
 import {
   messages,
   participantOrigins,
   planSnapshots,
+  roomEvents,
   rooms,
 } from "@workspace/db/schema"
 // TYPE-ONLY, from the dependency-light types module (NOT the task impl): gives
@@ -56,13 +57,22 @@ export type StartAnalysisResult = { runId: string; analysisId: string }
  * That throw is caught and marks the just-inserted snapshot "failed" (rather
  * than leaving it stuck "running" forever) before rethrowing, so callers
  * still see the failure and the plan card doesn't get permanently blanked.
+ *
+ * `source` (e.g. "auto_event_time") tags WHY the run exists — it rides both the
+ * analysis_requested event payload and the run's trigger-time metadata, which is
+ * the only channel useRoomAgent can read (it skips the payload column). A manual
+ * re-run (no source) in a DECIDED room clears the decision in the same
+ * withRoomRevision: the decision is pinned to a snapshot, so a new one
+ * invalidates it (status → "gathering", decidedSnapshotId null, settings.decided
+ * dropped, decided:update null broadcast).
  */
 export async function startAnalysis(opts: {
   roomId: string
   participantId: string
   triggerMessageId?: string
+  source?: string
 }): Promise<StartAnalysisResult> {
-  const { roomId, participantId, triggerMessageId } = opts
+  const { roomId, participantId, triggerMessageId, source } = opts
   const db = getDb()
 
   // 1. Origins guard. Two rows are enough to decide; no need to count them all.
@@ -75,15 +85,17 @@ export async function startAnalysis(opts: {
     throw new NeedsOriginsError()
   }
 
-  // 2. Read current revision, then insert the running snapshot pinned to it.
+  // 2. Read current revision (+ status, to clear a decision on a manual
+  // re-run), then insert the running snapshot pinned to it.
   const [room] = await db
-    .select({ currentRevision: rooms.currentRevision })
+    .select({ currentRevision: rooms.currentRevision, status: rooms.status })
     .from(rooms)
     .where(eq(rooms.id, roomId))
     .limit(1)
   if (!room) {
     throw new Error(`startAnalysis: room not found: ${roomId}`)
   }
+  const wasDecided = room.status === "decided"
 
   const [snapshot] = await db
     .insert(planSnapshots)
@@ -99,11 +111,32 @@ export async function startAnalysis(opts: {
   const { analysisId } = snapshot
 
   // 3. Append the analysis_requested event (ADR 0007 revision bump + event).
+  // A manual re-run in a decided room clears the decision in the SAME tx (the
+  // decision is pinned to a snapshot a new run supersedes). `source` records
+  // why this run exists so a later phase can label the "Updating…" badge.
   await withRoomRevision({
     roomId,
     eventType: "analysis_requested",
     actorParticipantId: participantId,
-    payload: { analysisId },
+    payload: {
+      analysisId,
+      ...(source ? { source } : {}),
+      ...(wasDecided ? { clearedDecision: true } : {}),
+    },
+    ...(wasDecided
+      ? {
+          write: async (tx) => {
+            await tx
+              .update(rooms)
+              .set({
+                status: "gathering",
+                decidedSnapshotId: null,
+                settings: sql`${rooms.settings} - 'decided'`,
+              })
+              .where(eq(rooms.id, roomId))
+          },
+        }
+      : {}),
   })
 
   // 4. Trigger the orchestrator. Tagged so the room's realtime token (scoped to
@@ -113,7 +146,13 @@ export async function startAnalysis(opts: {
     handle = await tasks.trigger<RoomAgentTask>(
       "room-agent",
       { roomId, analysisId, triggerMessageId, participantId },
-      { tags: [`room:${roomId}`] }
+      {
+        tags: [`room:${roomId}`],
+        // metadata.source is the ONLY channel useRoomAgent can read the reason
+        // from (it skips the payload column); merges per-key, so status updates
+        // inside the run don't clobber it.
+        ...(source ? { metadata: { source } } : {}),
+      }
     )
   } catch (err) {
     // Steps 1-3 already committed, so the snapshot inserted in step 2 is
@@ -152,7 +191,105 @@ export async function startAnalysis(opts: {
     console.warn("startAnalysis: broadcast agent:started failed", err)
   }
 
+  // If this re-run cleared a decision (step 3), tell every tab to drop its
+  // decided banner / re-enable voting. Best-effort, same as agent:started.
+  if (wasDecided) {
+    try {
+      await broadcastRoomEvent(roomId, { type: "decided:update", decision: null })
+    } catch (err) {
+      console.warn("startAnalysis: broadcast decided:update(null) failed", err)
+    }
+  }
+
   return { runId: handle.id, analysisId }
+}
+
+const AUTO_REPLAN_COOLDOWN_SECONDS = 30
+
+/**
+ * Fire-and-forget re-cost of an existing plan after a room-level input changed
+ * (today: the event time). Called AFTER the triggering write commits; swallows
+ * everything so it can never surface to the caller. Guards, in order (mirror of
+ * the tasks-side auto-replan twin in a later phase — keep the predicate in
+ * sync):
+ *   0. room is NOT decided — a background action must never blow away a host's
+ *      lock-in (the host re-runs manually to change a decided plan);
+ *   1. >= 2 origins (else there's nothing fair to compute — and startAnalysis
+ *      would throw NeedsOriginsError anyway);
+ *   2. a COMPLETE plan already exists AND no run is in flight (newest snapshot
+ *      isn't running/pending) — "re-plan", not "first plan" (that's manual);
+ *   3. no analysis_requested event in the last 30s — bounds the auto-replan
+ *      rate so rapid edits can't fan out a run per keystroke.
+ * On passing all guards it delegates to startAnalysis with source
+ * "auto_event_time".
+ */
+export async function maybeAutoReplan(
+  roomId: string,
+  participantId: string
+): Promise<void> {
+  try {
+    const db = getDb()
+
+    // Guard 0 — decided rooms are off-limits to background replans.
+    const [room] = await db
+      .select({ status: rooms.status })
+      .from(rooms)
+      .where(eq(rooms.id, roomId))
+      .limit(1)
+    if (!room || room.status === "decided") return
+
+    // Guard 1 — need at least two origins.
+    const originRows = await db
+      .select({ participantId: participantOrigins.participantId })
+      .from(participantOrigins)
+      .where(eq(participantOrigins.roomId, roomId))
+      .limit(2)
+    if (originRows.length < 2) return
+
+    // Guard 2 — a run must not already be in flight, and a complete plan must
+    // exist to re-cost.
+    const [newest] = await db
+      .select({ status: planSnapshots.status })
+      .from(planSnapshots)
+      .where(eq(planSnapshots.roomId, roomId))
+      .orderBy(desc(planSnapshots.createdAt))
+      .limit(1)
+    if (!newest || newest.status === "running" || newest.status === "pending") {
+      return
+    }
+    const [complete] = await db
+      .select({ id: planSnapshots.id })
+      .from(planSnapshots)
+      .where(
+        and(
+          eq(planSnapshots.roomId, roomId),
+          eq(planSnapshots.status, "complete")
+        )
+      )
+      .limit(1)
+    if (!complete) return
+
+    // Guard 3 — 30s cooldown: skip if another analysis was requested inside the
+    // window (bounds the auto-replan rate).
+    const cutoff = new Date(Date.now() - AUTO_REPLAN_COOLDOWN_SECONDS * 1000)
+    const [recent] = await db
+      .select({ id: roomEvents.id })
+      .from(roomEvents)
+      .where(
+        and(
+          eq(roomEvents.roomId, roomId),
+          eq(roomEvents.eventType, "analysis_requested"),
+          sql`${roomEvents.createdAt} > ${cutoff}`
+        )
+      )
+      .limit(1)
+    if (recent) return
+
+    await startAnalysis({ roomId, participantId, source: "auto_event_time" })
+  } catch (err) {
+    // Best-effort by design — a skipped/failed auto-replan must not surface.
+    console.warn("maybeAutoReplan: skipped or failed", err)
+  }
 }
 
 /**
