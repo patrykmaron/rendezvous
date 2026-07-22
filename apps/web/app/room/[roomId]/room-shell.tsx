@@ -386,13 +386,17 @@ function RoomView({
     completedRunId,
     session.participantId
   )
-  // Why a re-plan is in flight. The `auto_constraints` source rides the run's
-  // trigger-time metadata and is wired in a later phase; until then a re-plan is
-  // always a manual re-run, so the label is the generic one.
+  // Why a re-plan is in flight. The source marker rides the run's trigger-time
+  // metadata: "auto_constraints" (chat added/removed preferences) and
+  // "auto_event_time" (event time changed) are set by their trigger paths;
+  // anything else is a manual re-run.
+  const replanSource = agent.activeRun?.metadata?.source
   const updatingLabel =
-    agent.activeRun?.metadata?.source === "auto_constraints"
+    replanSource === "auto_constraints"
       ? "Rethinking with your new preferences…"
-      : "Updating the plan…"
+      : replanSource === "auto_event_time"
+        ? "Updating for the new time…"
+        : "Updating the plan…"
 
   // Live replanning signal (G2-review carryover): a run is "replanning" the
   // instant an orchestrator run goes active, not only once the server flips the
