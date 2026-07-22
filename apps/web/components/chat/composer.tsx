@@ -30,6 +30,24 @@ export function Composer({
   const [value, setValue] = React.useState("")
   const idleTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  // Show a "@agent" completion hint while the draft's trailing token is a
+  // partial @-mention and the mention isn't already present. Tab or a click
+  // completes it to "@agent ".
+  const lastToken = value.split(/\s+/).pop() ?? ""
+  const showAgentHint = lastToken.startsWith("@") && !/@agent\b/i.test(value)
+
+  const completeAgentMention = React.useCallback(() => {
+    setValue((v) => v.replace(/@\S*$/, "@agent "))
+    updateMyPresence({ isTyping: true })
+  }, [updateMyPresence])
+
+  function handleKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    if (showAgentHint && event.key === "Tab" && !event.shiftKey) {
+      event.preventDefault()
+      completeAgentMention()
+    }
+  }
+
   const stopTyping = React.useCallback(() => {
     if (idleTimer.current) {
       clearTimeout(idleTimer.current)
@@ -67,11 +85,27 @@ export function Composer({
   return (
     <form
       onSubmit={handleSubmit}
-      className="flex shrink-0 items-center gap-2 border-t border-border p-3"
+      className="relative flex shrink-0 items-center gap-2 border-t border-border p-3"
     >
+      {showAgentHint ? (
+        <div className="absolute bottom-full left-3 mb-1">
+          <button
+            type="button"
+            // Keep the input focused when the pill is clicked (mousedown steals
+            // focus otherwise), so completion doesn't blur the composer.
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={completeAgentMention}
+            className="rounded-full border border-border bg-background px-2 py-0.5 text-xs text-muted-foreground shadow-sm hover:bg-accent"
+          >
+            <span className="font-medium text-foreground">@agent</span> — ask for
+            a plan
+          </button>
+        </div>
+      ) : null}
       <Input
         value={value}
         onChange={handleChange}
+        onKeyDown={handleKeyDown}
         onBlur={stopTyping}
         disabled={disabled}
         maxLength={CONTENT_MAX}

@@ -26,6 +26,7 @@ An ADR is immutable once accepted: if a decision is reversed or refined, a new A
 | [0016](0016-mapbox-gl-for-the-map-surface.md)            | Mapbox GL (via react-map-gl) for the shared map surface                                  | Accepted |
 | [0017](0017-mapbox-standard-style-3d-orbit.md)           | Mapbox Standard style (3D) with theme→lightPreset and a Shard attract-mode orbit         | Accepted |
 | [0018](0018-google-places-preview-enrichment.md)         | Server-proxied Google Places (New) venue previews, in-process cache                      | Accepted |
+| [0019](0019-background-constraint-extraction.md)         | Background constraint extraction from every chat message via a Trigger.dev task          | Accepted |
 
 ## Adding an ADR
 

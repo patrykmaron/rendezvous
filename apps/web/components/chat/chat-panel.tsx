@@ -17,6 +17,7 @@ import type {
 } from "@/lib/types"
 
 import { Composer } from "./composer"
+import { ConstraintChips } from "./constraint-chips"
 import { MessageList } from "./message-list"
 import { TypingRow } from "./typing-row"
 
@@ -298,6 +299,7 @@ export function ChatPanel({
           onToggleReaction={handleToggleReaction}
         />
         <TypingRow />
+        <ConstraintChips roomId={roomId} session={session} />
         <Composer onSubmit={handleSubmit} />
       </div>
     </TooltipProvider>
