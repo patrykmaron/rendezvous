@@ -22,9 +22,16 @@ import { broadcastRoomEvent } from "../lib/liveblocks"
 import { generateCandidatesTask } from "./analysis/generate-candidates"
 import { getVenuesTask, type Venue } from "./analysis/get-venues"
 import { finalizePlanTask, markPlanFailed } from "./analysis/finalize-plan"
+import { journeyDetailsTask } from "./analysis/journey-details"
 import { routeMatrixTask } from "./analysis/route-matrix"
 import { scoreCandidatesTask } from "./analysis/score-candidates"
-import type { AnalysisOrigin, Candidate, PlanResult } from "./analysis/types"
+import { capJourneyPoints } from "./analysis/travel"
+import type {
+  AnalysisOrigin,
+  Candidate,
+  PlanJourney,
+  PlanResult,
+} from "./analysis/types"
 import { AGENT_MODEL } from "./agent/model"
 import { agentStream } from "./streams"
 
@@ -58,6 +65,9 @@ type AgentState = {
   ranked?: RankedCandidate[]
   venues?: unknown
   venuesByCell?: Map<string, Venue[]>
+  // Exact door-to-door journeys keyed h3 → participantId → journey, fetched in
+  // the deterministic finish path and merged into each candidate row.
+  journeys?: Map<string, Map<string, PlanJourney>>
   // Set when an analysis tool (generate_candidates / compute_route_matrix /
   // rank_candidates) returns a semantic "no results" outcome. The system
   // prompt tells the model to post its own apologetic send_chat and stop
@@ -92,7 +102,9 @@ type OverlayRoutes = {
   features: Array<{
     type: "Feature"
     geometry: { type: "LineString"; coordinates: [number, number][] }
-    properties: { color: string }
+    // `mode` is additive (web MapOverlay.routes is a generic FeatureCollection);
+    // it drives the walking-dash line layer. Absent on straight-line fallbacks.
+    properties: { color: string; mode?: string }
   }>
 }
 type MapOverlay = {
@@ -165,7 +177,7 @@ const TOOLS: Tool[] = [
         categories: {
           type: ["array", "null"],
           description:
-            "Free-text venue keywords, matched case-insensitively as substrings against Foursquare taxonomy labels (e.g. \"steakhouse\", \"cocktail bar\", \"vegan\", \"coffee\", \"live music\"). Derive them from the room's constraints/chat when the group expressed a venue preference; pass null for a general mix.",
+            'Free-text venue keywords, matched case-insensitively as substrings against Foursquare taxonomy labels (e.g. "steakhouse", "cocktail bar", "vegan", "coffee", "live music"). Derive them from the room\'s constraints/chat when the group expressed a venue preference; pass null for a general mix.',
           items: { type: "string" },
         },
       },
@@ -254,6 +266,8 @@ TfL journey routing may be unavailable. If compute_route_matrix returns {kind:"n
 
 type LoadedContext = {
   room: { name: string; currentRevision: number }
+  /** London wall-clock "yyyy-MM-ddTHH:mm" target time, or null when unset. */
+  eventAt: string | null
   origins: Array<{
     participantId: string
     name: string
@@ -261,6 +275,8 @@ type LoadedContext = {
     lat: number
     lng: number
     label: string | null
+    transportModes: string[]
+    requiresStepFree: boolean
   }>
   members: Array<{ name: string; color: string }>
   constraints: Array<{
@@ -281,10 +297,18 @@ async function loadContext(
   const db = getDb()
 
   const [room] = await db
-    .select({ name: rooms.name, currentRevision: rooms.currentRevision })
+    .select({
+      name: rooms.name,
+      currentRevision: rooms.currentRevision,
+      settings: rooms.settings,
+    })
     .from(rooms)
     .where(eq(rooms.id, roomId))
   if (!room) throw new Error(`room-agent: room not found: ${roomId}`)
+
+  // rooms.settings is jsonb; guard the runtime value even though it is typed.
+  const eventAt =
+    typeof room.settings?.eventAt === "string" ? room.settings.eventAt : null
 
   const members = await db
     .select({ name: participants.displayName, color: participants.color })
@@ -300,6 +324,8 @@ async function loadContext(
       lat: participantOrigins.latitude,
       lng: participantOrigins.longitude,
       label: participantOrigins.label,
+      transportModes: participantOrigins.transportModes,
+      requiresStepFree: participantOrigins.requiresStepFree,
     })
     .from(participantOrigins)
     .innerJoin(
@@ -356,7 +382,15 @@ async function loadContext(
       }
   }
 
-  return { room, origins, members, constraints, history, triggerMessage }
+  return {
+    room,
+    eventAt,
+    origins,
+    members,
+    constraints,
+    history,
+    triggerMessage,
+  }
 }
 
 function buildInstructions(ctx: LoadedContext): string {
@@ -365,7 +399,7 @@ function buildInstructions(ctx: LoadedContext): string {
     ctx.origins
       .map(
         (o) =>
-          `${o.name} from ${o.lat.toFixed(4)},${o.lng.toFixed(4)}${o.label ? ` (${o.label})` : ""}`
+          `${o.name} from ${o.lat.toFixed(4)},${o.lng.toFixed(4)}${o.label ? ` (${o.label})` : ""}${o.requiresStepFree ? " (step-free)" : ""}`
       )
       .join("; ") || "(none)"
   const constraintList =
@@ -392,6 +426,7 @@ function buildInstructions(ctx: LoadedContext): string {
 Group: ${ctx.room.name}
 Members: ${memberList}
 Start points: ${originList}
+Event time: ${ctx.eventAt ?? "not set"}
 Constraints: ${constraintList}
 Triggering message: ${trigger}`
 }
@@ -628,6 +663,8 @@ export const roomAgentTask = schemaTask({
       color: o.color,
       lat: o.lat,
       lng: o.lng,
+      transportModes: o.transportModes,
+      requiresStepFree: o.requiresStepFree,
     }))
     const participantById = new Map(
       ctx.origins.map((o) => [
@@ -683,6 +720,7 @@ export const roomAgentTask = schemaTask({
         roomRevision,
         origins,
         candidates: state.candidates,
+        ...(ctx.eventAt ? { eventAt: ctx.eventAt } : {}),
       })
       if (!res.ok) {
         state.routeMatrix = { error: "task_failed" }
@@ -886,6 +924,42 @@ export const roomAgentTask = schemaTask({
         )
       }
 
+      // Fetch exact door-to-door journeys (with geometry) for the top-3 areas.
+      // Wrapped so any TfL blip is logged and skipped — a missing journey falls
+      // back to compact chips + straight lines and NEVER fails the plan.
+      setStatus("summarizing", "Fetching exact journeys…")
+      try {
+        const targets = state.ranked.slice(0, 3).flatMap((r) => {
+          const cell = state.candidates?.find((c) => c.h3 === r.h3)
+          return cell ? [{ h3: r.h3, lat: cell.lat, lng: cell.lng }] : []
+        })
+        if (targets.length > 0) {
+          const jd = await journeyDetailsTask.triggerAndWait({
+            origins,
+            targets,
+            ...(ctx.eventAt ? { eventAt: ctx.eventAt } : {}),
+          })
+          if (jd.ok && jd.output.kind === "ok") {
+            const byCell = new Map<string, Map<string, PlanJourney>>()
+            for (const j of jd.output.journeys) {
+              let inner = byCell.get(j.h3)
+              if (!inner) {
+                inner = new Map()
+                byCell.set(j.h3, inner)
+              }
+              inner.set(j.participantId, j.journey)
+            }
+            state.journeys = byCell
+          } else if (!jd.ok) {
+            logger.warn("journey-details failed (non-fatal)", {
+              error: String(jd.error),
+            })
+          }
+        }
+      } catch (e) {
+        logger.warn("journey-details threw (non-fatal)", { error: String(e) })
+      }
+
       setStatus("summarizing", "Summarizing…")
       const result = assemblePlanResult(state, participantById)
 
@@ -948,11 +1022,15 @@ function assemblePlanResult(
       maxMinutes: r.maxMinutes,
       perParticipant: r.perParticipant.map((p) => {
         const info = participantById.get(p.participantId)
+        // Exact journey for this participant to this cell, when journey-details
+        // returned one (omitted otherwise → card falls back to compact chips).
+        const journey = state.journeys?.get(r.h3)?.get(p.participantId)
         return {
           participantId: p.participantId,
           name: info?.name ?? "Someone",
           color: info?.color ?? "#3B82F6",
           minutes: p.minutes,
+          ...(journey ? { journey } : {}),
         }
       }),
       venues: venues.map((v) => ({
@@ -1018,20 +1096,45 @@ function publishFinalOverlay(
     })
   })
 
-  const routes: OverlayRoutes = {
-    type: "FeatureCollection",
-    features: ctx.origins.map((o) => ({
-      type: "Feature",
-      geometry: {
-        type: "LineString",
-        coordinates: [
-          [o.lng, o.lat],
-          [cell.lng, cell.lat],
-        ],
+  // Winner's real journeys, when journey-details captured them. Each rides run
+  // metadata (256KB cap), so re-cap to 150 pts/participant; the full 50-pt/leg
+  // geometry stays in the plan snapshot (assemblePlanResult).
+  const winnerJourneys = state.journeys?.get(winner.h3)
+  const features: OverlayRoutes["features"] = ctx.origins.flatMap((o) => {
+    const legs = winnerJourneys?.get(o.participantId)?.legs ?? []
+    const geoLegs = capJourneyPoints(
+      legs.filter((l) => l.pathPoints && l.pathPoints.length >= 2),
+      150
+    )
+    if (geoLegs.length > 0) {
+      return geoLegs.map((l) => ({
+        type: "Feature" as const,
+        geometry: {
+          type: "LineString" as const,
+          // pathPoints are [lat, lon]; GeoJSON wants [lng, lat].
+          coordinates: l.pathPoints!.map(
+            ([lat, lon]) => [lon, lat] as [number, number]
+          ),
+        },
+        properties: { color: o.color, mode: l.mode },
+      }))
+    }
+    // Fallback: straight origin → centroid line (no journey / no geometry).
+    return [
+      {
+        type: "Feature" as const,
+        geometry: {
+          type: "LineString" as const,
+          coordinates: [
+            [o.lng, o.lat],
+            [cell.lng, cell.lat],
+          ] as [number, number][],
+        },
+        properties: { color: o.color },
       },
-      properties: { color: o.color },
-    })),
-  }
+    ]
+  })
+  const routes: OverlayRoutes = { type: "FeatureCollection", features }
   const overlay: MapOverlay = {
     pins,
     routes,
