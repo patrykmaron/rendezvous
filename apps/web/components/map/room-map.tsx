@@ -11,10 +11,12 @@ import { MapPinIcon } from "@phosphor-icons/react/dist/csr/MapPin"
 import Map, {
   Layer,
   Marker,
+  Popup,
   Source,
   type LayerProps,
   type MapMouseEvent,
   type MapRef,
+  type MarkerEvent,
 } from "react-map-gl/mapbox"
 import { useTheme } from "next-themes"
 
@@ -24,8 +26,9 @@ import { Button } from "@workspace/ui/components/button"
 
 import { setOrigin } from "@/app/actions/origin"
 import { LiveCursor } from "@/components/presence/live-cursor"
-import type { MapOverlay, OriginPoint } from "@/lib/types"
+import type { MapOverlay, OriginPoint, PlacePreviewTarget } from "@/lib/types"
 
+import { PlacePreviewCard } from "./place-preview-card"
 import { useOrbit, type OrbitPoint } from "./use-orbit"
 
 // Publicly-inlined at build (NEXT_PUBLIC_*); a client component may read it.
@@ -102,11 +105,12 @@ function CandidatePin({ rank, label }: { rank?: number; label?: string }) {
   )
 }
 
-/** A concrete venue on a candidate: a smaller dot. */
+/** A concrete venue on a candidate: a smaller dot. Clickable — see the
+ * venue-pin Marker's onClick in RoomMap, which opens a place-preview card. */
 function VenuePin({ color, label }: { color?: string; label?: string }) {
   return (
     <div
-      className="size-3 cursor-default rounded-full bg-foreground/70 shadow ring-1 ring-background"
+      className="size-3 cursor-pointer rounded-full bg-foreground/70 shadow ring-1 ring-background transition-transform hover:scale-150"
       style={color ? { backgroundColor: color } : undefined}
       title={label}
     />
@@ -118,11 +122,15 @@ export function RoomMap({
   session,
   origins,
   overlay,
+  preview,
+  onPreviewChange,
 }: {
   roomId: string
   session: { participantId: string; sessionToken: string; color: string }
   origins: OriginPoint[]
   overlay: MapOverlay
+  preview: PlacePreviewTarget | null
+  onPreviewChange: (preview: PlacePreviewTarget | null) => void
 }) {
   const mapRef = React.useRef<MapRef>(null)
   const { resolvedTheme } = useTheme()
@@ -213,7 +221,12 @@ export function RoomMap({
 
   const handleMapClick = React.useCallback(
     (event: MapMouseEvent) => {
-      if (!settingOrigin) return
+      if (!settingOrigin) {
+        // A click that reaches here (rather than a venue-pin Marker's own
+        // handler) is on the map background — dismiss any open preview.
+        onPreviewChange(null)
+        return
+      }
       const lat = event.lngLat.lat
       const lng = event.lngLat.lng
       setSettingOrigin(false)
@@ -230,7 +243,7 @@ export function RoomMap({
         }
       })
     },
-    [settingOrigin, session.sessionToken, roomId]
+    [settingOrigin, session.sessionToken, roomId, onPreviewChange]
   )
 
   // Fit the camera to all points. The bounds are memoized off the coordinate
@@ -362,6 +375,24 @@ export function RoomMap({
             longitude={pin.lng}
             latitude={pin.lat}
             anchor="center"
+            onClick={
+              pin.kind === "venue"
+                ? (event: MarkerEvent<MouseEvent>) => {
+                    // Marker clicks bubble to the map's own onClick
+                    // (handleMapClick), which would otherwise read this as a
+                    // background click and immediately clear the preview it
+                    // just opened.
+                    event.originalEvent.stopPropagation()
+                    onPreviewChange({
+                      id: pin.id,
+                      name: pin.label ?? "Venue",
+                      lat: pin.lat,
+                      lng: pin.lng,
+                      fsqPlaceId: pin.placeId,
+                    })
+                  }
+                : undefined
+            }
           >
             {pin.kind === "candidate" ? (
               <CandidatePin rank={pin.rank} label={pin.label} />
@@ -384,6 +415,24 @@ export function RoomMap({
             </Marker>
           ) : null
         )}
+
+        {preview ? (
+          <Popup
+            longitude={preview.lng}
+            latitude={preview.lat}
+            anchor="bottom"
+            offset={14}
+            closeButton={false}
+            maxWidth="none"
+            onClose={() => onPreviewChange(null)}
+          >
+            <PlacePreviewCard
+              target={preview}
+              roomId={roomId}
+              sessionToken={session.sessionToken}
+            />
+          </Popup>
+        ) : null}
       </Map>
 
       {originsToRender.length === 0 ? (

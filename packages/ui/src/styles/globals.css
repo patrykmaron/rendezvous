@@ -127,3 +127,21 @@
     @apply bg-background text-foreground;
     }
 }
+
+/* Mapbox GL popup chrome neutralization (ADR 0018): the place-preview card
+   supplies its own border/shadow/background, so the default popup bubble
+   (white background, tail, close button) would double up on it. z-index 20
+   is required — remote-cursor Markers mount later in DOM order and would
+   otherwise paint over the card. */
+.mapboxgl-popup {
+  z-index: 20;
+}
+.mapboxgl-popup-content {
+  background: transparent;
+  padding: 0;
+  box-shadow: none;
+  border-radius: 0;
+}
+.mapboxgl-popup-tip {
+  display: none;
+}

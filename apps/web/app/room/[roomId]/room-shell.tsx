@@ -55,7 +55,12 @@ import {
   setRoomSession,
   type RoomSession,
 } from "@/lib/session"
-import type { MapOverlay, OriginPoint, PlanCandidate } from "@/lib/types"
+import type {
+  MapOverlay,
+  OriginPoint,
+  PlacePreviewTarget,
+  PlanCandidate,
+} from "@/lib/types"
 
 // mapbox-gl touches `window`/`document` at module scope, so the map is loaded
 // client-only (never server-rendered). ssr:false is valid here because this
@@ -79,6 +84,21 @@ const MAX_VISIBLE_OTHERS = 4
 
 function initialOf(name: string): string {
   return name.trim().charAt(0).toUpperCase() || "?"
+}
+
+/**
+ * A candidate's venues, filtered to finite coordinates and paired with the
+ * overlay pin id `focusCandidate` assigns them (`venue-<h3>-<index>`, indexed
+ * within this filtered list — matches `publishFinalOverlay` in room-agent.ts).
+ * Shared by `focusCandidate` and the plan-card venue-chip handler below so a
+ * chip click always resolves the id its own pin actually has.
+ */
+function candidateVenuePins(
+  candidate: PlanCandidate
+): Array<{ venue: PlanCandidate["venues"][number]; id: string }> {
+  return candidate.venues
+    .filter((v) => Number.isFinite(v.lat) && Number.isFinite(v.lng))
+    .map((venue, i) => ({ venue, id: `venue-${candidate.h3}-${i}` }))
 }
 
 /** Solid-fill, initial-letter avatar tinted with a participant's colour. */
@@ -332,6 +352,11 @@ function RoomView({
     routes: null,
     focus: null,
   })
+  // The venue a place-preview card is currently open for (map pin click or
+  // plan-card venue chip) — null when no card is showing. Cleared below
+  // whenever `overlay.pins` no longer contains a pin with this id (a fresh
+  // agent overlay replaced it, or the run was superseded).
+  const [preview, setPreview] = React.useState<PlacePreviewTarget | null>(null)
 
   // Live agent state (Trigger.dev realtime): active/last run, status, streamed
   // text, map overlay, timeline, routing progress. Drives the map overlay, the
@@ -382,9 +407,8 @@ function RoomView({
   // results card. Guards against a malformed H3 by falling back to the venue
   // centroid, and no-ops if neither yields a usable centre.
   const focusCandidate = React.useCallback((candidate: PlanCandidate) => {
-    const venuePoints = candidate.venues.filter(
-      (v) => Number.isFinite(v.lat) && Number.isFinite(v.lng)
-    )
+    const venuePins = candidateVenuePins(candidate)
+    const venuePoints = venuePins.map((p) => p.venue)
 
     let center: { lat: number; lng: number } | null = null
     try {
@@ -421,16 +445,50 @@ function RoomView({
         rank: candidate.rank,
         label: candidate.name,
       },
-      ...venuePoints.map((v, i) => ({
-        id: `venue-${candidate.h3}-${i}`,
-        lat: v.lat,
-        lng: v.lng,
+      ...venuePins.map(({ venue, id }) => ({
+        id,
+        lat: venue.lat,
+        lng: venue.lng,
         kind: "venue" as const,
-        label: v.name,
+        label: venue.name,
+        ...(venue.fsqPlaceId ? { placeId: venue.fsqPlaceId } : {}),
       })),
     ]
     setOverlay({ pins, routes: null, focus: { ...center, zoom: 14 } })
   }, [])
+
+  // Open a place-preview card for one venue on a candidate: focuses the map
+  // on that candidate (as a row click would) and opens the card at the pin
+  // `focusCandidate` just placed for it — reusing `candidateVenuePins` so the
+  // id always matches, which keeps the clear-on-overlay-change effect below
+  // from immediately closing a card that was just opened.
+  const handleVenuePreview = React.useCallback(
+    (candidate: PlanCandidate, venueIndex: number) => {
+      focusCandidate(candidate)
+      const venue = candidate.venues[venueIndex]
+      if (!venue) return
+      const pin = candidateVenuePins(candidate).find((p) => p.venue === venue)
+      if (!pin) return // non-finite coordinates — no pin was placed for it
+      setPreview({
+        id: pin.id,
+        name: venue.name,
+        lat: venue.lat,
+        lng: venue.lng,
+        category: venue.category,
+        fsqPlaceId: venue.fsqPlaceId,
+      })
+    },
+    [focusCandidate, setPreview]
+  )
+
+  // A fresh agent overlay (or a focusCandidate call for a different
+  // candidate) can drop the pin the open preview points at — close the card
+  // rather than leave it pinned to a stale/vanished location.
+  React.useEffect(() => {
+    if (!preview) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (!overlay.pins.some((p) => p.id === preview.id)) setPreview(null)
+  }, [overlay.pins, preview])
 
   // participantId → {name, color}, used to enrich origin:update nudges (which
   // carry only coordinates) without a round-trip. Refetched if an unknown
@@ -689,6 +747,8 @@ function RoomView({
             }}
             origins={origins}
             overlay={overlay}
+            preview={preview}
+            onPreviewChange={setPreview}
           />
         </div>
         {/* Mobile (<md): a full-height sheet toggled by the floating chat
@@ -733,6 +793,7 @@ function RoomView({
             }}
             completedRunId={completedRunId}
             onFocusCandidate={focusCandidate}
+            onVenuePreview={handleVenuePreview}
           />
           <CursorOverlay surface="chat" />
         </aside>

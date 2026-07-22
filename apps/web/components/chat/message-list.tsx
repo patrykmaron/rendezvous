@@ -46,6 +46,7 @@ export function MessageList({
   plan,
   agent,
   onFocus,
+  onVenuePreview,
   onToggleReaction,
 }: {
   messages: ChatMessage[]
@@ -53,6 +54,7 @@ export function MessageList({
   plan: PlanSnapshotView | null
   agent: ChatAgentActivity
   onFocus: (candidate: PlanCandidate) => void
+  onVenuePreview: (candidate: PlanCandidate, venueIndex: number) => void
   onToggleReaction: (messageId: string, emoji: string) => void
 }) {
   const containerRef = React.useRef<HTMLDivElement>(null)
@@ -161,7 +163,13 @@ export function MessageList({
             )
           )}
 
-          {plan ? <PlanCard plan={plan} onFocus={onFocus} /> : null}
+          {plan ? (
+            <PlanCard
+              plan={plan}
+              onFocus={onFocus}
+              onVenuePreview={onVenuePreview}
+            />
+          ) : null}
 
           {agent.isActive ? (
             <AgentActivity

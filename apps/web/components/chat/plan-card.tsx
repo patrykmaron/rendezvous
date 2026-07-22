@@ -36,52 +36,71 @@ function RankBadge({ rank }: { rank: number }) {
 function CandidateRow({
   candidate,
   onFocus,
+  onVenuePreview,
 }: {
   candidate: PlanCandidate
   onFocus: (candidate: PlanCandidate) => void
+  onVenuePreview: (candidate: PlanCandidate, venueIndex: number) => void
 }) {
   const venues = candidate.venues.slice(0, 3)
+  const showVenues = candidate.rank === 1 && venues.length > 0
   return (
-    <button
-      type="button"
-      onClick={() => onFocus(candidate)}
-      className="flex w-full flex-col gap-1.5 px-3 py-2.5 text-left transition-colors outline-none hover:bg-muted focus-visible:bg-muted"
-    >
-      <div className="flex items-center gap-2">
-        <RankBadge rank={candidate.rank} />
-        <span className="min-w-0 flex-1 truncate text-xs font-medium">
-          {candidate.name}
-        </span>
-        <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">
-          avg {mins(candidate.avgMinutes)} · max {mins(candidate.maxMinutes)}
-        </span>
-      </div>
-
-      <div className="flex flex-wrap gap-x-2 gap-y-1 pl-7">
-        {candidate.perParticipant.map((p) => (
-          <span
-            key={p.participantId}
-            className="inline-flex items-center gap-1 text-[11px] text-muted-foreground"
-            title={`${p.name}: ${mins(p.minutes)}`}
-          >
-            <span
-              className="size-2 shrink-0 rounded-full"
-              style={{ backgroundColor: p.color }}
-            />
-            <span className="tabular-nums">{mins(p.minutes)}</span>
+    // The venue chips below are their own <button>s — nesting them inside
+    // the row's button would be invalid HTML, so this cell is a plain div
+    // and the row click target is just the button wrapping everything else.
+    <div className="flex flex-col">
+      <button
+        type="button"
+        onClick={() => onFocus(candidate)}
+        className="flex w-full flex-col gap-1.5 px-3 py-2.5 text-left transition-colors outline-none hover:bg-muted focus-visible:bg-muted"
+      >
+        <div className="flex items-center gap-2">
+          <RankBadge rank={candidate.rank} />
+          <span className="min-w-0 flex-1 truncate text-xs font-medium">
+            {candidate.name}
           </span>
-        ))}
-      </div>
-
-      {candidate.rank === 1 && venues.length > 0 ? (
-        <div className="flex items-start gap-1 pl-7 text-[11px] text-muted-foreground">
-          <MapPinIcon weight="fill" className="mt-px size-3 shrink-0" />
-          <span className="min-w-0 truncate">
-            {venues.map((v) => v.name).join(" · ")}
+          <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">
+            avg {mins(candidate.avgMinutes)} · max {mins(candidate.maxMinutes)}
           </span>
         </div>
+
+        <div className="flex flex-wrap gap-x-2 gap-y-1 pl-7">
+          {candidate.perParticipant.map((p) => (
+            <span
+              key={p.participantId}
+              className="inline-flex items-center gap-1 text-[11px] text-muted-foreground"
+              title={`${p.name}: ${mins(p.minutes)}`}
+            >
+              <span
+                className="size-2 shrink-0 rounded-full"
+                style={{ backgroundColor: p.color }}
+              />
+              <span className="tabular-nums">{mins(p.minutes)}</span>
+            </span>
+          ))}
+        </div>
+      </button>
+
+      {showVenues ? (
+        <div className="flex flex-wrap items-center gap-1 px-3 pb-2.5 pl-7">
+          <MapPinIcon
+            weight="fill"
+            className="size-3 shrink-0 text-muted-foreground"
+          />
+          {venues.map((v, i) => (
+            <button
+              key={`${candidate.h3}-venue-${i}`}
+              type="button"
+              onClick={() => onVenuePreview(candidate, i)}
+              title={v.name}
+              className="max-w-[9rem] truncate rounded-full border border-border/60 px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors outline-none hover:border-foreground/30 hover:bg-muted hover:text-foreground focus-visible:bg-muted"
+            >
+              {v.name}
+            </button>
+          ))}
+        </div>
       ) : null}
-    </button>
+    </div>
   )
 }
 
@@ -95,9 +114,11 @@ function CandidateRow({
 export function PlanCard({
   plan,
   onFocus,
+  onVenuePreview,
 }: {
   plan: PlanSnapshotView
   onFocus: (candidate: PlanCandidate) => void
+  onVenuePreview: (candidate: PlanCandidate, venueIndex: number) => void
 }) {
   if (plan.status === "running" || plan.status === "pending") return null
 
@@ -126,6 +147,7 @@ export function PlanCard({
             key={candidate.h3}
             candidate={candidate}
             onFocus={onFocus}
+            onVenuePreview={onVenuePreview}
           />
         ))}
       </div>

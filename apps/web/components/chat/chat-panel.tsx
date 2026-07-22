@@ -89,6 +89,7 @@ export function ChatPanel({
   agent,
   completedRunId,
   onFocusCandidate,
+  onVenuePreview,
 }: {
   roomId: string
   session: RoomSession
@@ -98,6 +99,7 @@ export function ChatPanel({
   // nudge below — deduped so a given completion refetches at most once).
   completedRunId: string | undefined
   onFocusCandidate: (candidate: PlanCandidate) => void
+  onVenuePreview: (candidate: PlanCandidate, venueIndex: number) => void
 }) {
   const [messages, setMessages] = React.useState<ChatMessage[]>([])
   const [plan, setPlan] = React.useState<PlanSnapshotView | null>(null)
@@ -292,6 +294,7 @@ export function ChatPanel({
           plan={plan}
           agent={agent}
           onFocus={onFocusCandidate}
+          onVenuePreview={onVenuePreview}
           onToggleReaction={handleToggleReaction}
         />
         <TypingRow />
