@@ -102,6 +102,9 @@ export type MapOverlay = {
     // preview card on click (ADR 0018). Optional: old persisted snapshots
     // and model-painted pins predate/omit it.
     placeId?: string
+    // Google Places id (venue pins only) — lets the preview route fetch the
+    // place directly (exact, cheaper) instead of Text Search (ADR 0020).
+    googlePlaceId?: string
   }>
   routes: GeoJSON.FeatureCollection | null
   focus?: { lat: number; lng: number; zoom?: number } | null
@@ -119,6 +122,9 @@ export type PlacePreviewTarget = {
   lng: number
   category?: string
   fsqPlaceId?: string
+  // Google Places id — when present the preview route GETs the place directly
+  // (exact match, cheaper than Text Search; ADR 0020).
+  googlePlaceId?: string
 }
 
 // The agent's proposed meeting areas, denormalised into plan_snapshots.result
@@ -145,6 +151,14 @@ export type PlanCandidate = {
     lng: number
     category?: string
     fsqPlaceId?: string
+    // Google Places liveness fields (ADR 0020). All optional so pre-F plan
+    // snapshots parse — mirror of Venue (get-venues.ts) + the planCandidate zod
+    // schema (packages/tasks/src/trigger/analysis/types.ts).
+    googlePlaceId?: string
+    verified?: boolean
+    source?: "foursquare" | "google"
+    rating?: number
+    userRatingCount?: number
   }>
 }
 

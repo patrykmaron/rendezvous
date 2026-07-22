@@ -42,11 +42,26 @@ function SkeletonCard() {
 }
 
 function FallbackCard({ target }: { target: PlacePreviewTarget }) {
+  // Even when Google can't resolve the venue (e.g. a stale Foursquare entry that
+  // no longer exists), give the user an action: a zero-cost Google Maps search
+  // link built from the pin's own name + coords (ADR 0020).
+  const mapsQuery = encodeURIComponent(
+    `${target.name} ${target.lat},${target.lng}`
+  )
   return (
     <div className={cn(CONTAINER_CLASS, "flex flex-col gap-1.5 p-3")}>
       <span className="truncate text-sm font-medium">{target.name}</span>
       <CategoryChip category={target.category} />
       <p className="text-xs text-muted-foreground">Preview unavailable</p>
+      <a
+        href={`https://www.google.com/maps/search/?api=1&query=${mapsQuery}`}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="mt-0.5 flex items-center gap-1 text-xs text-primary hover:underline"
+      >
+        Search on Google Maps
+        <ArrowSquareOutIcon className="size-3" />
+      </a>
     </div>
   )
 }
@@ -104,7 +119,16 @@ function PlaceCard({
           </p>
         ) : null}
 
-        {place.openNow !== null ? (
+        {place.businessStatus === "CLOSED_PERMANENTLY" ? (
+          // A confirmed-dead venue: destructive badge, no open-now dot (ADR 0020).
+          <span className="inline-flex w-fit items-center rounded-full bg-destructive/10 px-1.5 py-0.5 text-[10px] font-medium text-destructive">
+            Permanently closed
+          </span>
+        ) : place.businessStatus === "CLOSED_TEMPORARILY" ? (
+          <span className="inline-flex w-fit items-center rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-600 dark:text-amber-500">
+            Temporarily closed
+          </span>
+        ) : place.openNow !== null ? (
           <div className="flex items-center gap-1.5 text-xs">
             <span
               className={cn(
@@ -166,6 +190,9 @@ export function PlacePreviewCard({
       lat: String(target.lat),
       lng: String(target.lng),
     })
+    // Prefer the exact Google-id lookup when we have it (ADR 0020); `fsq` still
+    // travels for the Text Search fallback / cache-key when there's no gp.
+    if (target.googlePlaceId) params.set("gp", target.googlePlaceId)
     if (target.fsqPlaceId) params.set("fsq", target.fsqPlaceId)
 
     fetch(`/api/places/preview?${params.toString()}`, {
@@ -194,6 +221,7 @@ export function PlacePreviewCard({
     target.lat,
     target.lng,
     target.fsqPlaceId,
+    target.googlePlaceId,
   ])
 
   if (state.kind === "loading") return <SkeletonCard />

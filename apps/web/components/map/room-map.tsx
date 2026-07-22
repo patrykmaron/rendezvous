@@ -404,6 +404,7 @@ export function RoomMap({
                       lat: pin.lat,
                       lng: pin.lng,
                       fsqPlaceId: pin.placeId,
+                      googlePlaceId: pin.googlePlaceId,
                     })
                   }
                 : undefined

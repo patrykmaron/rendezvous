@@ -452,6 +452,7 @@ function RoomView({
         kind: "venue" as const,
         label: venue.name,
         ...(venue.fsqPlaceId ? { placeId: venue.fsqPlaceId } : {}),
+        ...(venue.googlePlaceId ? { googlePlaceId: venue.googlePlaceId } : {}),
       })),
     ]
     setOverlay({ pins, routes: null, focus: { ...center, zoom: 14 } })
@@ -482,6 +483,7 @@ function RoomView({
         lng: venue.lng,
         category: venue.category,
         fsqPlaceId: venue.fsqPlaceId,
+        googlePlaceId: venue.googlePlaceId,
       })
     },
     [focusCandidate, setPreview, setChatOpen]

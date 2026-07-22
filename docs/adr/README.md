@@ -27,6 +27,7 @@ An ADR is immutable once accepted: if a decision is reversed or refined, a new A
 | [0017](0017-mapbox-standard-style-3d-orbit.md)           | Mapbox Standard style (3D) with theme→lightPreset and a Shard attract-mode orbit         | Accepted |
 | [0018](0018-google-places-preview-enrichment.md)         | Server-proxied Google Places (New) venue previews, in-process cache                      | Accepted |
 | [0019](0019-background-constraint-extraction.md)         | Background constraint extraction from every chat message via a Trigger.dev task          | Accepted |
+| [0020](0020-google-validation-backfill-for-plan-venues.md) | Validate + backfill plan venues against Google Places (New) inside `ch-get-venues`      | Accepted |
 
 ## Adding an ADR
 

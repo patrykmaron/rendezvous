@@ -19,8 +19,17 @@ import { UUID_RE } from "@/lib/validate"
 //  - identical concurrent misses are coalesced onto ONE Google call;
 //  - per-participant + global rate limits cap Google-call attempts per minute.
 
+// X-Goog-FieldMask must be comma-separated with NO spaces — Google's parser
+// 400s on a padded mask ("Cannot find matching fields for path ' places.…'"),
+// which silently degraded every preview to `unavailable`. `businessStatus`
+// added for the closed-venue badge (ADR 0020).
 const PLACES_FIELD_MASK =
-  "places.id, places.displayName, places.location, places.rating, places.userRatingCount, places.priceLevel, places.formattedAddress, places.googleMapsUri, places.regularOpeningHours.openNow, places.photos"
+  "places.id,places.displayName,places.location,places.businessStatus,places.rating,places.userRatingCount,places.priceLevel,places.formattedAddress,places.googleMapsUri,places.regularOpeningHours.openNow,places.photos"
+
+// Place Details GET returns a single place (no `places.` wrapper), so its mask
+// drops the prefix. Same fields, same no-spaces rule.
+const DETAILS_FIELD_MASK =
+  "id,displayName,location,businessStatus,rating,userRatingCount,priceLevel,formattedAddress,googleMapsUri,regularOpeningHours.openNow,photos"
 
 const NAME_MAX = 200
 // Text Search's locationBias is a *bias*, not a hard filter — the mismatch
@@ -45,6 +54,11 @@ const CACHE_CAP = 500
 // This is defence-in-depth: even a well-formed id no longer keys the cache on
 // its own (see `cacheKey`), so it can't map one id onto another venue's data.
 const FSQ_RE = /^[A-Za-z0-9_-]{1,64}$/
+
+// A Google Places id (ADR 0020). Slightly longer than an fsq id; still an opaque
+// token shape. Validated the same defence-in-depth way as `fsq`; malformed → the
+// gp path is skipped and the route falls back to Text Search.
+const GP_RE = /^[A-Za-z0-9_-]{1,128}$/
 
 // Rate limiting: fixed 60s windows, plain counters. Caps GOOGLE-CALL ATTEMPTS
 // only — cache hits and coalesced awaiters never reach the limiter, so normal
@@ -112,6 +126,18 @@ function cacheKey(
   lng: number
 ): string {
   return `${fsq ?? "-"}|${name.toLowerCase()}|${lat.toFixed(4)}|${lng.toFixed(4)}`
+}
+
+// Google-id path gets its OWN key namespace (ADR 0020). Still bound to
+// name+coords so a forged `gp` lands in its own key and can't map onto a
+// different venue's cached data — same poisoning defence as `cacheKey`.
+function cacheKeyGp(
+  gp: string,
+  name: string,
+  lat: number,
+  lng: number
+): string {
+  return `gp:${gp}|${name.toLowerCase()}|${lat.toFixed(4)}|${lng.toFixed(4)}`
 }
 
 // True (and counts the attempt) when both the per-participant and global
@@ -183,6 +209,7 @@ function haversineMeters(
 type GooglePlace = {
   displayName?: { text?: string }
   location?: { latitude?: number; longitude?: number }
+  businessStatus?: string
   rating?: number
   userRatingCount?: number
   priceLevel?: string
@@ -193,6 +220,40 @@ type GooglePlace = {
 }
 type GoogleSearchTextResponse = { places?: GooglePlace[] }
 type GooglePhotoMediaResponse = { photoUri?: string }
+
+// Narrow Google's businessStatus string to the card's known union; anything
+// else (or absent) → null, so the card just omits the closed badge.
+function mapBusinessStatus(status: unknown): PlacePreview["businessStatus"] {
+  return status === "OPERATIONAL" ||
+    status === "CLOSED_TEMPORARILY" ||
+    status === "CLOSED_PERMANENTLY"
+    ? status
+    : null
+}
+
+// Build the card's PlacePreview from a Google place + already-fetched photo.
+// Shared by the Text Search and Place Details paths.
+function toPreview(
+  place: GooglePlace,
+  fallbackName: string,
+  photoUrl: string | null
+): PlacePreview {
+  return {
+    name: place.displayName?.text ?? fallbackName,
+    rating: typeof place.rating === "number" ? place.rating : null,
+    userRatingCount:
+      typeof place.userRatingCount === "number" ? place.userRatingCount : null,
+    priceLevel: mapPriceLevel(place.priceLevel),
+    address: place.formattedAddress ?? null,
+    openNow:
+      typeof place.regularOpeningHours?.openNow === "boolean"
+        ? place.regularOpeningHours.openNow
+        : null,
+    photoUrl,
+    googleMapsUri: place.googleMapsUri ?? null,
+    businessStatus: mapBusinessStatus(place.businessStatus),
+  }
+}
 
 async function fetchPhotoUrl(
   apiKey: string,
@@ -293,22 +354,75 @@ async function fetchPreview(
 
   const photoUrl = await fetchPhotoUrl(apiKey, place.photos?.[0]?.name)
 
-  const preview: PlacePreview = {
-    name: place.displayName?.text ?? query.name,
-    rating: typeof place.rating === "number" ? place.rating : null,
-    userRatingCount:
-      typeof place.userRatingCount === "number" ? place.userRatingCount : null,
-    priceLevel: mapPriceLevel(place.priceLevel),
-    address: place.formattedAddress ?? null,
-    openNow:
-      typeof place.regularOpeningHours?.openNow === "boolean"
-        ? place.regularOpeningHours.openNow
-        : null,
-    photoUrl,
-    googleMapsUri: place.googleMapsUri ?? null,
+  return {
+    response: { ok: true, place: toPreview(place, query.name, photoUrl) },
+    ttlMs: CACHE_TTL_MS,
+  }
+}
+
+/**
+ * Fetch a preview by Google Place id via Place Details GET (ADR 0020). Exact and
+ * cheaper than Text Search — no `pageSize`/`locationBias` and NO haversine
+ * mismatch guard (the id already identifies the place). Never throws. A stale/
+ * removed id 404s → durable `not_found`; other failures → short-lived
+ * `unavailable`.
+ */
+async function fetchDetailsPreview(
+  apiKey: string,
+  placeId: string,
+  fallbackName: string
+): Promise<{ response: PlacePreviewResponse; ttlMs: number }> {
+  let detailsRes: Response
+  try {
+    detailsRes = await fetch(
+      `https://places.googleapis.com/v1/places/${placeId}`,
+      {
+        headers: {
+          "X-Goog-Api-Key": apiKey,
+          "X-Goog-FieldMask": DETAILS_FIELD_MASK,
+        },
+      }
+    )
+  } catch (err) {
+    console.warn("places-preview: details request failed", err)
+    return {
+      response: { ok: false, reason: "unavailable" },
+      ttlMs: UNAVAILABLE_TTL_MS,
+    }
   }
 
-  return { response: { ok: true, place: preview }, ttlMs: CACHE_TTL_MS }
+  if (!detailsRes.ok) {
+    // A place id Google no longer knows 404s (NOT_FOUND) — that's a durable
+    // not_found (cache 24h), not a transient outage.
+    if (detailsRes.status === 404) {
+      return {
+        response: { ok: false, reason: "not_found" },
+        ttlMs: CACHE_TTL_MS,
+      }
+    }
+    console.warn("places-preview: details returned", detailsRes.status)
+    return {
+      response: { ok: false, reason: "unavailable" },
+      ttlMs: UNAVAILABLE_TTL_MS,
+    }
+  }
+
+  let place: GooglePlace
+  try {
+    place = (await detailsRes.json()) as GooglePlace
+  } catch (err) {
+    console.warn("places-preview: details body was not JSON", err)
+    return {
+      response: { ok: false, reason: "unavailable" },
+      ttlMs: UNAVAILABLE_TTL_MS,
+    }
+  }
+
+  const photoUrl = await fetchPhotoUrl(apiKey, place.photos?.[0]?.name)
+  return {
+    response: { ok: true, place: toPreview(place, fallbackName, photoUrl) },
+    ttlMs: CACHE_TTL_MS,
+  }
 }
 
 export async function GET(request: Request): Promise<Response> {
@@ -319,6 +433,8 @@ export async function GET(request: Request): Promise<Response> {
   const lng = Number(url.searchParams.get("lng"))
   const fsqRaw = url.searchParams.get("fsq")
   const fsq = fsqRaw && FSQ_RE.test(fsqRaw) ? fsqRaw : undefined
+  const gpRaw = url.searchParams.get("gp")
+  const gp = gpRaw && GP_RE.test(gpRaw) ? gpRaw : undefined
 
   if (
     !UUID_RE.test(roomId) ||
@@ -351,7 +467,9 @@ export async function GET(request: Request): Promise<Response> {
     } satisfies PlacePreviewResponse)
   }
 
-  const key = cacheKey(fsq, name, lat, lng)
+  // A valid `gp` takes the exact Place Details path in its own key namespace;
+  // otherwise the Text Search path keyed on fsq+name+coords.
+  const key = gp ? cacheKeyGp(gp, name, lat, lng) : cacheKey(fsq, name, lat, lng)
 
   const cached = cacheGet(key)
   if (cached) {
@@ -377,7 +495,9 @@ export async function GET(request: Request): Promise<Response> {
   }
 
   console.log("places-preview miss", key)
-  const promise = fetchPreview(apiKey, { name, lat, lng })
+  const promise = gp
+    ? fetchDetailsPreview(apiKey, gp, name)
+    : fetchPreview(apiKey, { name, lat, lng })
   inflight.set(key, promise)
   let result: { response: PlacePreviewResponse; ttlMs: number }
   try {

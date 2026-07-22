@@ -15,6 +15,14 @@ export type PlacePreview = {
   openNow: boolean | null
   photoUrl: string | null
   googleMapsUri: string | null
+  // Google's liveness flag for the place (ADR 0020) — drives the "Permanently
+  // closed" / "Temporarily closed" badge on the card. null when Google returned
+  // no (recognized) status.
+  businessStatus:
+    | "OPERATIONAL"
+    | "CLOSED_TEMPORARILY"
+    | "CLOSED_PERMANENTLY"
+    | null
 }
 
 export type PlacePreviewResponse =
