@@ -23,6 +23,25 @@ export const roomStatuses = [
 ] as const
 export type RoomStatus = (typeof roomStatuses)[number]
 
+/**
+ * Denormalised room settings (rooms.settings jsonb). Both keys are optional so
+ * existing `{}` rows parse. `decided` is a structural mirror of RoomDecision in
+ * apps/web/lib/types.ts (a package must not import from an app — keep the two in
+ * sync). Writers MUST jsonb-merge (`settings || …` to set, `settings - 'key'` to
+ * clear), never whole-object overwrite, so independent keys (event-time,
+ * decision) can't clobber each other.
+ */
+export type RoomSettings = {
+  eventAt?: string // London-local ISO target meeting time
+  decided?: {
+    snapshotId: string
+    candidateH3: string
+    candidateName: string
+    decidedBy: { participantId: string; name: string }
+    decidedAt: string
+  }
+}
+
 export const rooms = pgTable("rooms", {
   id: uuid("id").primaryKey().defaultRandom(),
   name: text("name").notNull(),
@@ -32,7 +51,7 @@ export const rooms = pgTable("rooms", {
     (): AnyPgColumn => planSnapshots.id,
     { onDelete: "set null" }
   ),
-  settings: jsonb("settings").notNull().default({}),
+  settings: jsonb("settings").$type<RoomSettings>().notNull().default({}),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
@@ -263,6 +282,9 @@ export const roomEventTypes = [
   "reaction_added",
   "reaction_removed",
   "color_changed",
+  // Room settings (event-time / decision) changed. TS-only union member — the
+  // event_type column is plain text, so no migration is needed to add it.
+  "settings_updated",
 ] as const
 export type RoomEventType = (typeof roomEventTypes)[number]
 

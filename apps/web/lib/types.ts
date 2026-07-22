@@ -144,6 +144,26 @@ export type PlanCandidate = {
     name: string
     color: string
     minutes: number
+    // Door-to-door TfL journey for this participant to the area (G-phase).
+    // Optional so pre-existing snapshots parse; mirror of the `journey` object
+    // in the planCandidate zod schema (packages/tasks/src/trigger/analysis/
+    // types.ts). Times are London-local ISO; `pathPoints` are [lat, lon].
+    journey?: {
+      durationMinutes: number
+      startDateTime: string // London-local ISO — "leave by" source
+      arrivalDateTime: string
+      fareTotalPence?: number
+      legs: Array<{
+        mode: string
+        lineName?: string
+        instruction: string
+        departureTime: string
+        arrivalTime: string
+        durationMinutes?: number
+        isDisrupted: boolean
+        pathPoints?: [number, number][] // [lat, lon]
+      }>
+    }
   }>
   venues: Array<{
     name: string
@@ -166,10 +186,51 @@ export type PlanResult = {
   candidates: PlanCandidate[]
 }
 
-// The latest plan snapshot for a room, as served by GET /api/rooms/[id]/plan.
+// One candidate area's approval tally. `voterIds` are participant ids —
+// colours/names resolve client-side from the members map. Broadcast live via
+// `vote:update` (receivers replace the whole list, never increment).
+export type VoteTally = {
+  candidateH3: string
+  voterIds: string[]
+}
+
+// The host's locked-in decision, denormalised into rooms.settings.decided
+// (mirror the shape in RoomSettings, packages/db/src/postgres/schema.ts).
+export type RoomDecision = {
+  snapshotId: string
+  candidateH3: string
+  candidateName: string
+  decidedBy: { participantId: string; name: string }
+  decidedAt: string // ISO-8601
+}
+
+// One plan snapshot, as embedded in PlanResponse. `id` is the vote key
+// (plan_snapshots.id); a running/pending/failed status is possible (the first
+// run before any complete plan exists), which the card decides how to show.
 export type PlanSnapshotView = {
+  id: string // plan_snapshots.id — the vote key
   status: "pending" | "running" | "complete" | "failed"
   analysisId: string
   result: PlanResult | null
   createdAt: string
+}
+
+// GET /api/rooms/[id]/plan — always 200. `plan` is the newest COMPLETE
+// snapshot (newest-overall only when none was ever complete), so a re-plan in
+// flight keeps the previous plan on screen instead of blanking it. `replanning`
+// / `updateFailed` describe the newest-overall snapshot relative to `plan`.
+export type PlanResponse = {
+  // Newest COMPLETE snapshot; newest-overall only if none complete ever; null
+  // when the room has never been analysed (the empty state).
+  plan: PlanSnapshotView | null
+  // Newest-overall snapshot is running/pending — a re-plan is in flight.
+  replanning: boolean
+  // Newest-overall snapshot failed while a complete plan is still shown.
+  updateFailed: boolean
+  // Approval tallies for plan.id; [] when plan is null.
+  votes: VoteTally[]
+  // candidateH3s the caller has approved on plan.id.
+  myVotes: string[]
+  // The host's locked-in decision, or null when the room isn't decided.
+  decision: RoomDecision | null
 }

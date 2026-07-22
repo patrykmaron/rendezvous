@@ -47,6 +47,29 @@ export const planCandidate = z.object({
       name: z.string(),
       color: z.string(),
       minutes: z.number(),
+      // Door-to-door TfL journey (G-phase). Optional so pre-existing snapshots
+      // parse — mirror of PlanCandidate.perParticipant[].journey in
+      // apps/web/lib/types.ts. Times are London-local ISO; pathPoints [lat,lon].
+      journey: z
+        .object({
+          durationMinutes: z.number(),
+          startDateTime: z.string(),
+          arrivalDateTime: z.string(),
+          fareTotalPence: z.number().optional(),
+          legs: z.array(
+            z.object({
+              mode: z.string(),
+              lineName: z.string().optional(),
+              instruction: z.string(),
+              departureTime: z.string(),
+              arrivalTime: z.string(),
+              durationMinutes: z.number().optional(),
+              isDisrupted: z.boolean(),
+              pathPoints: z.array(z.tuple([z.number(), z.number()])).optional(),
+            })
+          ),
+        })
+        .optional(),
     })
   ),
   venues: z.array(

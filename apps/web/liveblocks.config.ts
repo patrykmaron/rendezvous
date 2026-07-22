@@ -1,4 +1,9 @@
-import type { ChatMessage, ConstraintView, ReactionUpdate } from "@/lib/types"
+import type {
+  ChatMessage,
+  ConstraintView,
+  ReactionUpdate,
+  RoomDecision,
+} from "@/lib/types"
 
 // Single source of truth for Liveblocks' per-room typing. Per ADR 0012,
 // Liveblocks carries ONLY ephemeral, presence-shaped state plus small
@@ -60,6 +65,20 @@ export type RoomEvent =
       action: "added" | "removed"
       constraint: ConstraintView
     }
+  // The room's target meeting time changed (G-phase event-time). null clears it.
+  | { type: "settings:update"; eventAt: string | null }
+  // A vote was toggled. `voterIds` is the FULL post-change tally for the
+  // candidate — receivers replace that candidate's list, never increment.
+  | {
+      type: "vote:update"
+      snapshotId: string
+      candidateH3: string
+      voterIds: string[]
+      action: "added" | "removed"
+      participantId: string
+    }
+  // The host locked in (or cleared, on a re-plan) a decision.
+  | { type: "decided:update"; decision: RoomDecision | null }
 
 declare global {
   interface Liveblocks {

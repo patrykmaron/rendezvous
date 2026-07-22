@@ -49,6 +49,7 @@ import {
 import { useAgentToasts } from "@/hooks/use-agent-toasts"
 import { isFinalStatus, useRoomAgent } from "@/hooks/use-room-agent"
 import { PARTICIPANT_COLORS } from "@/lib/colors"
+import { candidateVenuePins } from "@/lib/plan-utils"
 import {
   clearRoomSession,
   getRoomSession,
@@ -84,21 +85,6 @@ const MAX_VISIBLE_OTHERS = 4
 
 function initialOf(name: string): string {
   return name.trim().charAt(0).toUpperCase() || "?"
-}
-
-/**
- * A candidate's venues, filtered to finite coordinates and paired with the
- * overlay pin id `focusCandidate` assigns them (`venue-<h3>-<index>`, indexed
- * within this filtered list — matches `publishFinalOverlay` in room-agent.ts).
- * Shared by `focusCandidate` and the plan-card venue-chip handler below so a
- * chip click always resolves the id its own pin actually has.
- */
-function candidateVenuePins(
-  candidate: PlanCandidate
-): Array<{ venue: PlanCandidate["venues"][number]; id: string }> {
-  return candidate.venues
-    .filter((v) => Number.isFinite(v.lat) && Number.isFinite(v.lng))
-    .map((venue, i) => ({ venue, id: `venue-${candidate.h3}-${i}` }))
 }
 
 /** Solid-fill, initial-letter avatar tinted with a participant's colour. */
