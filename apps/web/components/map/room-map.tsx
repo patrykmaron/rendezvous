@@ -29,6 +29,7 @@ import { LiveCursor } from "@/components/presence/live-cursor"
 import type { MapOverlay, OriginPoint, PlacePreviewTarget } from "@/lib/types"
 
 import { PlacePreviewCard } from "./place-preview-card"
+import { TravelPrefsPopover } from "./travel-prefs-popover"
 import { useOrbit, type OrbitPoint } from "./use-orbit"
 
 // Publicly-inlined at build (NEXT_PUBLIC_*); a client component may read it.
@@ -209,6 +210,13 @@ export function RoomMap({
       },
     ]
   }, [origins, localOrigin, session.participantId, session.color, myName])
+
+  // My authoritative origin entry (carries saved travel prefs) — gates the
+  // travel-prefs popover. From `origins` (not originsToRender, whose optimistic
+  // local pin has no prefs), so it appears once the durable row is in the list.
+  const myOrigin = origins.find(
+    (o) => o.participantId === session.participantId
+  )
 
   // Publish my own cursor as I move; clear it when I leave the map. No manual
   // throttle needed — Liveblocks coalesces presence writes to the provider's
@@ -465,19 +473,30 @@ export function RoomMap({
             {originError}
           </p>
         ) : null}
-        <Button
-          type="button"
-          variant={settingOrigin ? "default" : "outline"}
-          size="sm"
-          className="shadow-md"
-          onClick={() => {
-            setOriginError(null)
-            setSettingOrigin((v) => !v)
-          }}
-        >
-          <MapPinIcon weight="fill" />
-          {settingOrigin ? "Click the map…" : "Set my start point"}
-        </Button>
+        <div className="flex items-center gap-2">
+          {/* Prefs edit the routing pipeline, so they only appear once this
+              member actually has a start point on the authenticated list. */}
+          {myOrigin ? (
+            <TravelPrefsPopover
+              roomId={roomId}
+              sessionToken={session.sessionToken}
+              mine={myOrigin}
+            />
+          ) : null}
+          <Button
+            type="button"
+            variant={settingOrigin ? "default" : "outline"}
+            size="sm"
+            className="shadow-md"
+            onClick={() => {
+              setOriginError(null)
+              setSettingOrigin((v) => !v)
+            }}
+          >
+            <MapPinIcon weight="fill" />
+            {settingOrigin ? "Click the map…" : "Set my start point"}
+          </Button>
+        </div>
       </div>
     </div>
   )

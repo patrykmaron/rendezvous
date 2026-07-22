@@ -2,12 +2,13 @@
 
 import { latLngToCell } from "h3-js"
 
-import { sql } from "@workspace/db/postgres"
+import { and, eq, getDb, sql } from "@workspace/db/postgres"
 import { withRoomRevision } from "@workspace/db/revision"
 import { participantOrigins } from "@workspace/db/schema"
 
 import { requireMember } from "@/lib/auth"
 import { broadcastRoomEvent } from "@/lib/liveblocks-server"
+import { sanitizeModes } from "@/lib/travel"
 
 // Server actions are public HTTP endpoints (callable directly, not just from
 // the map) — every input is validated here, never trusted from the client.
@@ -129,4 +130,68 @@ export async function setOrigin(
   }
 
   return { ok: true, lat, lng, ...(label ? { label } : {}) }
+}
+
+export type SetTravelPrefsResult = { ok: true } | { ok: false; error: string }
+
+/**
+ * Updates this member's travel preferences on their existing origin row. Prefs
+ * feed the routing pipeline (which TfL modes to plan with, step-free) — they do
+ * NOT move the pin, so there is deliberately no origin:update broadcast (that
+ * event carries coordinates and re-renders markers): prefs are picked up by the
+ * next analysis and by a fresh authenticated origins fetch. transportModes are
+ * sanitised against the whitelist mirror (lib/travel.ts). No origin row yet →
+ * typed prompt to set a start point first.
+ */
+export async function setTravelPrefs(
+  sessionToken: string,
+  roomId: string,
+  prefs: { transportModes: string[]; requiresStepFree: boolean }
+): Promise<SetTravelPrefsResult> {
+  const { participant } = await requireMember(sessionToken, roomId)
+
+  if (
+    typeof prefs !== "object" ||
+    prefs === null ||
+    typeof prefs.requiresStepFree !== "boolean"
+  ) {
+    return { ok: false, error: "Invalid travel preferences." }
+  }
+  const transportModes = sanitizeModes(prefs.transportModes)
+  const requiresStepFree = prefs.requiresStepFree
+
+  const db = getDb()
+  const [existing] = await db
+    .select({ id: participantOrigins.id })
+    .from(participantOrigins)
+    .where(
+      and(
+        eq(participantOrigins.roomId, roomId),
+        eq(participantOrigins.participantId, participant.id)
+      )
+    )
+    .limit(1)
+  if (!existing) {
+    return { ok: false, error: "Set your start point first." }
+  }
+
+  await withRoomRevision({
+    roomId,
+    eventType: "origin_updated",
+    actorParticipantId: participant.id,
+    payload: { participantId: participant.id, transportModes, requiresStepFree },
+    write: async (tx) => {
+      await tx
+        .update(participantOrigins)
+        .set({ transportModes, requiresStepFree, updatedAt: sql`now()` })
+        .where(
+          and(
+            eq(participantOrigins.roomId, roomId),
+            eq(participantOrigins.participantId, participant.id)
+          )
+        )
+    },
+  })
+
+  return { ok: true }
 }

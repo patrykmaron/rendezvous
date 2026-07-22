@@ -35,6 +35,8 @@ export async function GET(
       lat: participantOrigins.latitude,
       lng: participantOrigins.longitude,
       label: participantOrigins.label,
+      transportModes: participantOrigins.transportModes,
+      requiresStepFree: participantOrigins.requiresStepFree,
     })
     .from(participantOrigins)
     .innerJoin(
@@ -50,6 +52,8 @@ export async function GET(
     lat: r.lat,
     lng: r.lng,
     ...(r.label ? { label: r.label } : {}),
+    transportModes: r.transportModes,
+    requiresStepFree: r.requiresStepFree,
   }))
 
   return Response.json(origins)
