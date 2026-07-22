@@ -150,7 +150,12 @@ export type DecidePlanResult =
   | { ok: true; decision: RoomDecision }
   | {
       ok: false
-      error: "not_host" | "already_decided" | "stale_snapshot" | "invalid"
+      error:
+        | "not_host"
+        | "already_decided"
+        | "replanning"
+        | "stale_snapshot"
+        | "invalid"
     }
 
 /**
@@ -185,7 +190,7 @@ export async function decidePlan(
   }
 
   const db = getDb()
-  const [[room], [snapshot]] = await Promise.all([
+  const [[room], [snapshot], [newestOverall]] = await Promise.all([
     db
       .select({ status: rooms.status })
       .from(rooms)
@@ -202,10 +207,25 @@ export async function decidePlan(
       )
       .orderBy(desc(planSnapshots.createdAt))
       .limit(1),
+    // Newest-overall snapshot — a re-plan in flight (running/pending) must block
+    // a lock-in even for direct-API callers the UI hide doesn't cover: deciding
+    // on a snapshot about to be superseded would strand the decision.
+    db
+      .select({ status: planSnapshots.status })
+      .from(planSnapshots)
+      .where(eq(planSnapshots.roomId, roomId))
+      .orderBy(desc(planSnapshots.createdAt))
+      .limit(1),
   ])
 
   if (room?.status === "decided") {
     return { ok: false, error: "already_decided" }
+  }
+  if (
+    newestOverall &&
+    (newestOverall.status === "running" || newestOverall.status === "pending")
+  ) {
+    return { ok: false, error: "replanning" }
   }
   if (!snapshot || snapshot.id !== snapshotId) {
     return { ok: false, error: "stale_snapshot" }

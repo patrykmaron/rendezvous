@@ -393,6 +393,14 @@ function RoomView({
       ? "Rethinking with your new preferences…"
       : "Updating the plan…"
 
+  // Live replanning signal (G2-review carryover): a run is "replanning" the
+  // instant an orchestrator run goes active, not only once the server flips the
+  // newest snapshot to running/pending. This makes the "Updating…" badge, the
+  // hearts-disable, and the Lock-it-in hide engage immediately. `agent.isActive`
+  // is also true during a room's FIRST analysis (no plan yet), but the badge /
+  // disable surfaces only render when a plan exists, so that case is inert.
+  const replanningLive = planState.replanning || agent.isActive
+
   // Fold the agent's map overlay into the shared overlay state whenever it
   // changes (its identity is content-stable — see useRoomAgent). A manual
   // focusCandidate click can override it in between; the next agent update wins
@@ -465,6 +473,8 @@ function RoomView({
               toast.error("Only the host can lock in a spot.")
             else if (res.error === "already_decided")
               toast.error("A spot is already locked in.")
+            else if (res.error === "replanning")
+              toast.error("The plan is updating — try again in a moment.")
             else toast.error("Couldn't lock it in — please try again.")
           }
         } catch (err) {
@@ -904,7 +914,7 @@ function RoomView({
               isActive: agent.isActive,
             }}
             plan={planState.data?.plan ?? null}
-            replanning={planState.replanning}
+            replanning={replanningLive}
             updateFailed={planState.updateFailed}
             updatingLabel={updatingLabel}
             votes={planState.data?.votes ?? []}
