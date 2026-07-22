@@ -8,6 +8,7 @@ import { z } from "zod"
 
 import type { JourneyLeg, JourneyOption } from "../../tfl/schemas"
 import { tflJourneyPlanTask } from "../tfl-journey"
+import { modesFor, STEP_FREE_PREFERENCE, tflDateTimeFrom } from "./travel"
 import { analysisOrigin, candidate } from "./types"
 
 const routeMatrixPayload = z.object({
@@ -16,24 +17,24 @@ const routeMatrixPayload = z.object({
   roomRevision: z.number().int().nonnegative(),
   origins: z.array(analysisOrigin).min(1),
   candidates: z.array(candidate).min(1),
+  /** London wall-clock "yyyy-MM-ddTHH:mm" target time; absent → Saturday fallback. */
+  eventAt: z.string().optional(),
 })
 
 type RouteMatrixOutput =
   | { kind: "ok"; inserted: number; okCount: number; failedCount: number }
   | { kind: "no_routes" }
 
-// Journey-planner mode ids (live ids, not the OpenAPI list — ADR 0013).
-const ROUTE_MODES = [
-  "tube",
-  "bus",
-  "walking",
-  "dlr",
-  "overground",
-  "elizabeth-line",
-]
-
-/** Next Saturday at 19:00 — a representative evening-out departure. */
-function nextSaturdayDeparture(): { date: string; time: string; utc: Date } {
+/**
+ * Next Saturday at 19:00 — a representative evening-out departure, used as the
+ * fallback anchor when the room has no eventAt. Exported for journey-details,
+ * which shares the same fallback so scoring and journeys stay consistent.
+ */
+export function nextSaturdayDeparture(): {
+  date: string
+  time: string
+  utc: Date
+} {
   const now = new Date()
   const day = now.getUTCDay() // 0 Sun … 6 Sat
   let delta = (6 - day + 7) % 7
@@ -93,25 +94,34 @@ export const routeMatrixTask = schemaTask({
     roomRevision,
     origins,
     candidates,
+    eventAt,
   }): Promise<RouteMatrixOutput> => {
-    const departure = nextSaturdayDeparture()
-    const departureTime = toChDateTime(departure.utc)
+    const dep = nextSaturdayDeparture()
+    // Journey anchor: arrive-by the eventAt instant (parsed as UTC — the same
+    // approximation nextSaturdayDeparture makes) when set + valid + future,
+    // else the fallback Saturday. `when` also selects Arriving vs Departing.
+    const when = eventAt ? tflDateTimeFrom(eventAt) : null
+    const anchorUtc = when && eventAt ? new Date(`${eventAt}:00Z`) : dep.utc
+    const departureTime = toChDateTime(anchorUtc)
 
     metadata.root.set("routesTotal", origins.length * candidates.length)
     metadata.root.set("routesDone", 0)
 
     // Flatten to (origin, candidate) pairs; batch preserves item order, so the
-    // pair at index i maps to result.runs[i].
+    // pair at index i maps to result.runs[i]. Modes + step-free are per-origin.
     const pairs = origins.flatMap((o) => candidates.map((c) => ({ o, c })))
     const items = pairs.map(({ o, c }) => ({
       id: "tfl-journey-plan" as const,
       payload: {
         from: `${o.lat},${o.lng}`,
         to: `${c.lat},${c.lng}`,
-        mode: ROUTE_MODES,
-        date: departure.date,
-        time: departure.time,
-        timeIs: "Departing" as const,
+        mode: modesFor(o),
+        ...(o.requiresStepFree
+          ? { accessibilityPreference: STEP_FREE_PREFERENCE }
+          : {}),
+        ...(when
+          ? { date: when.date, time: when.time, timeIs: "Arriving" as const }
+          : { date: dep.date, time: dep.time, timeIs: "Departing" as const }),
       },
     }))
 
@@ -151,12 +161,18 @@ export const routeMatrixTask = schemaTask({
         participant_id: o.participantId,
         candidate_h3: c.h3,
         provider: "tfl",
-        transport_mode: "mixed",
+        // Honest per-origin mode set, e.g. "bus+tube+walking" (<= ~16 combos —
+        // fine for LowCardinality). Replaces the old dishonest "mixed".
+        transport_mode: modesFor(o).slice().sort().join("+"),
+        // Journey anchor time (arrival target when timeIs=Arriving, else the
+        // fallback Saturday departure). Analytics only — nothing reads it.
         departure_time: departureTime,
         duration_seconds: durationSeconds,
         walking_seconds: walkingSecs,
         interchange_count: interchangeCount,
-        accessibility_ok: 1,
+        // TfL enforces the step-free preference, so an existing journey IS
+        // accessible; a step-free request that yields no journey scores 0.
+        accessibility_ok: o.requiresStepFree && routeStatus !== "ok" ? 0 : 1,
         route_status: routeStatus,
       }
     })
