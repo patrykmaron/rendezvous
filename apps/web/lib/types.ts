@@ -82,6 +82,12 @@ export type OriginPoint = {
   lat: number
   lng: number
   label?: string
+  // Travel preferences (G-phase). Optional so the `origin:update` broadcast
+  // shape is untouched — these only ride the authenticated origins fetch and
+  // feed routing, not pin rendering. `transportModes` are raw TfL mode ids
+  // (see apps/web/lib/travel.ts).
+  transportModes?: string[]
+  requiresStepFree?: boolean
 }
 
 // Everything the agent (Task 9) can paint onto the map on top of the origins.
