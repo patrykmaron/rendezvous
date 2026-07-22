@@ -55,6 +55,7 @@ export const planCandidate = z.object({
       lat: z.number(),
       lng: z.number(),
       category: z.string().optional(),
+      fsqPlaceId: z.string().optional(),
     })
   ),
 })

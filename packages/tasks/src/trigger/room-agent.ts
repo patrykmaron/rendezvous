@@ -78,6 +78,11 @@ type OverlayPin = {
   kind: "candidate" | "venue"
   rank?: number
   label?: string
+  // Foursquare place id (venue pins only) — lets the client enrich the pin
+  // with a Google Places preview (ADR 0018). Optional so older persisted
+  // snapshots and model-painted pins (show_map's strict schema has no
+  // placeId field) still parse.
+  placeId?: string
 }
 type OverlayRoutes = {
   type: "FeatureCollection"
@@ -930,6 +935,7 @@ function assemblePlanResult(
         lat: v.lat,
         lng: v.lng,
         ...(v.category ? { category: v.category } : {}),
+        fsqPlaceId: v.fsqPlaceId,
       })),
     }
   })
@@ -971,6 +977,7 @@ function publishFinalOverlay(
       lng: v.lng,
       kind: "venue",
       label: v.name,
+      ...(v.fsqPlaceId ? { placeId: v.fsqPlaceId } : {}),
     })
   })
 

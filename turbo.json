@@ -14,7 +14,8 @@
     "LIVEBLOCKS_SECRET_KEY",
     "NEXT_PUBLIC_MAPBOX_TOKEN",
     "TRIGGER_SECRET_KEY",
-    "OPENAI_KEY"
+    "OPENAI_KEY",
+    "GOOGLE_PLACES_KEY"
   ],
   "tasks": {
     "build": {

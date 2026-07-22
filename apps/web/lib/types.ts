@@ -61,9 +61,27 @@ export type MapOverlay = {
     rank?: number
     label?: string
     color?: string
+    // Foursquare place id (venue pins only) — enables a Google Places
+    // preview card on click (ADR 0018). Optional: old persisted snapshots
+    // and model-painted pins predate/omit it.
+    placeId?: string
   }>
   routes: GeoJSON.FeatureCollection | null
   focus?: { lat: number; lng: number; zoom?: number } | null
+}
+
+// A pin the map/plan-card can request a Google Places preview card for
+// (ADR 0018). Deliberately its own type rather than reusing MapOverlay's pin
+// shape or PlanCandidate's venue shape — it's the one normalised input both
+// the map's venue-pin click and the plan-card's venue-chip click funnel
+// into before calling the preview API.
+export type PlacePreviewTarget = {
+  id: string
+  name: string
+  lat: number
+  lng: number
+  category?: string
+  fsqPlaceId?: string
 }
 
 // The agent's proposed meeting areas, denormalised into plan_snapshots.result
@@ -84,7 +102,13 @@ export type PlanCandidate = {
     color: string
     minutes: number
   }>
-  venues: Array<{ name: string; lat: number; lng: number; category?: string }>
+  venues: Array<{
+    name: string
+    lat: number
+    lng: number
+    category?: string
+    fsqPlaceId?: string
+  }>
 }
 
 export type PlanResult = {
