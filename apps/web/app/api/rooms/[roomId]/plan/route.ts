@@ -31,7 +31,9 @@ function asDecision(value: unknown): RoomDecision | null {
     typeof d.candidateH3 === "string" &&
     typeof d.candidateName === "string" &&
     typeof d.decidedAt === "string" &&
-    by !== undefined &&
+    // typeof null === "object", so an explicit `by !== null` is required — a
+    // null decidedBy would otherwise slip the guard and throw on by.participantId.
+    by !== null &&
     typeof by === "object" &&
     typeof by.participantId === "string" &&
     typeof by.name === "string"
