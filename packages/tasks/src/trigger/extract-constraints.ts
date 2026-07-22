@@ -302,42 +302,65 @@ export const extractConstraintsTask = schemaTask({
           ...(targetParticipantId && author ? { author } : {}),
         })
       } else {
-        // Retract: match the speaker's own rows of this kind by normalized key,
-        // falling back to every row of that kind when nothing matches exactly.
-        const speakerRows = await db
-          .select({
-            id: constraints.id,
-            kind: constraints.kind,
-            isHard: constraints.isHard,
-            payload: constraints.payload,
-            createdAt: constraints.createdAt,
-          })
-          .from(constraints)
-          .where(
-            and(
-              eq(constraints.roomId, roomId),
-              eq(constraints.participantId, participantId),
-              eq(constraints.kind, item.kind)
+        // Retract: direct the search by the model's scope but tolerate a
+        // mislabel. Personal → the speaker's own rows; group → the room's group
+        // rows (participantId IS NULL) — a group constraint can NEVER be matched
+        // by a speaker-scoped query, which is why group constraints used to be
+        // unretractable. If the scoped match is empty, fall back to the other
+        // scope before giving up (anyone may retract a group constraint, which
+        // mirrors the X-button permission model in the chip UI).
+        const speakerFilter = eq(constraints.participantId, participantId)
+        const groupFilter = sql`${constraints.participantId} is null`
+        const primaryFilter =
+          item.scope === "group" ? groupFilter : speakerFilter
+        const fallbackFilter =
+          item.scope === "group" ? speakerFilter : groupFilter
+
+        const rowsOfKind = (filter: typeof primaryFilter) =>
+          db
+            .select({
+              id: constraints.id,
+              kind: constraints.kind,
+              isHard: constraints.isHard,
+              payload: constraints.payload,
+              participantId: constraints.participantId,
+              createdAt: constraints.createdAt,
+            })
+            .from(constraints)
+            .where(
+              and(
+                eq(constraints.roomId, roomId),
+                filter,
+                eq(constraints.kind, item.kind)
+              )
             )
-          )
-        if (speakerRows.length === 0) {
+
+        let candidateRows = await rowsOfKind(primaryFilter)
+        if (candidateRows.length === 0) {
+          candidateRows = await rowsOfKind(fallbackFilter)
+        }
+        if (candidateRows.length === 0) {
           skipped++
           continue
         }
-        const exact = speakerRows.filter(
+        // Within the scoped set, match the normalized key exactly, falling back
+        // to every row of that kind when nothing matches exactly.
+        const exact = candidateRows.filter(
           (r) => payloadString(r.payload, "normalized") === item.normalized
         )
-        const matched = exact.length > 0 ? exact : speakerRows
+        const matched = exact.length > 0 ? exact : candidateRows
 
         for (const row of matched) {
           const summary = payloadString(row.payload, "summary") ?? row.kind
+          // Use the ROW's owner (null for a group row), not the speaker, so the
+          // durable event and the client chip-removal target the right row.
           await withRoomRevision({
             roomId,
             eventType: "constraint_removed",
             actorParticipantId: participantId,
             payload: {
               constraintId: row.id,
-              participantId,
+              participantId: row.participantId,
               kind: row.kind,
               summary,
               removedBy: "extractor",
@@ -351,7 +374,7 @@ export const extractConstraintsTask = schemaTask({
           await broadcastConstraint("removed", {
             id: row.id,
             roomId,
-            participantId,
+            participantId: row.participantId,
             kind: row.kind,
             isHard: row.isHard,
             summary,

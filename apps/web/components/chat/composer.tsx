@@ -88,7 +88,11 @@ export function Composer({
       className="relative flex shrink-0 items-center gap-2 border-t border-border p-3"
     >
       {showAgentHint ? (
-        <div className="absolute bottom-full left-3 mb-1">
+        // Right-aligned (not left): the ConstraintChips strip is left-aligned,
+        // so the right edge is the least-conflicting spot — the old left-3
+        // position painted over, and swallowed the X click of, the leftmost
+        // chip. z-20 keeps the deliberate overlay above the chips it does cover.
+        <div className="absolute right-3 bottom-full z-20 mb-1">
           <button
             type="button"
             // Keep the input focused when the pill is clicked (mousedown steals

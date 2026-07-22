@@ -465,6 +465,12 @@ function RoomView({
   const handleVenuePreview = React.useCallback(
     (candidate: PlanCandidate, venueIndex: number) => {
       focusCandidate(candidate)
+      // Close the mobile chat sheet so the focused map + popup are actually
+      // visible — otherwise the full-height sheet covers the map and the tap
+      // looks like it did nothing. No-op on md+: the aside's `md:` overrides
+      // (md:pointer-events-auto / md:translate-y-0) keep the desktop panel
+      // static regardless of this flag, and the floating button is md:hidden.
+      setChatOpen(false)
       const venue = candidate.venues[venueIndex]
       if (!venue) return
       const pin = candidateVenuePins(candidate).find((p) => p.venue === venue)
@@ -478,7 +484,7 @@ function RoomView({
         fsqPlaceId: venue.fsqPlaceId,
       })
     },
-    [focusCandidate, setPreview]
+    [focusCandidate, setPreview, setChatOpen]
   )
 
   // A fresh agent overlay (or a focusCandidate call for a different
@@ -486,8 +492,20 @@ function RoomView({
   // rather than leave it pinned to a stale/vanished location.
   React.useEffect(() => {
     if (!preview) return
+    // Match by id AND coordinates. `venue-<h3>-<i>` ids recur across plans for
+    // the same winning cell, so a fresh overlay can carry a pin with this exact
+    // id that now points at a DIFFERENT venue — an id-only check would leave the
+    // card pinned to a stale location/venue. Require the pin's lat/lng to still
+    // match the preview's (small epsilon absorbs float round-tripping).
+    const EPS = 1e-6
+    const stillValid = overlay.pins.some(
+      (p) =>
+        p.id === preview.id &&
+        Math.abs(p.lat - preview.lat) < EPS &&
+        Math.abs(p.lng - preview.lng) < EPS
+    )
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (!overlay.pins.some((p) => p.id === preview.id)) setPreview(null)
+    if (!stillValid) setPreview(null)
   }, [overlay.pins, preview])
 
   // participantId → {name, color}, used to enrich origin:update nudges (which
