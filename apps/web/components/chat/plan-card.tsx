@@ -20,8 +20,9 @@ function mins(value: number): string {
   return `${Math.round(value)}m`
 }
 
-/** Ranked colour badge (gold/silver/bronze tint for the podium). */
-function RankBadge({ rank }: { rank: number }) {
+/** Ranked colour badge (gold/silver/bronze tint for the podium). Exported for
+ *  the map-side venue carousel's area bar. */
+export function RankBadge({ rank }: { rank: number }) {
   const tint =
     rank === 1
       ? "bg-amber-400 text-black"

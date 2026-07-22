@@ -23,6 +23,7 @@ import { useTheme } from "next-themes"
 import "mapbox-gl/dist/mapbox-gl.css"
 
 import { Button } from "@workspace/ui/components/button"
+import { cn } from "@workspace/ui/lib/utils"
 
 import { setOrigin } from "@/app/actions/origin"
 import { LiveCursor } from "@/components/presence/live-cursor"
@@ -125,6 +126,7 @@ export function RoomMap({
   overlay,
   preview,
   onPreviewChange,
+  controlsRaised = false,
 }: {
   roomId: string
   session: { participantId: string; sessionToken: string; color: string }
@@ -132,6 +134,11 @@ export function RoomMap({
   overlay: MapOverlay
   preview: PlacePreviewTarget | null
   onPreviewChange: (preview: PlacePreviewTarget | null) => void
+  // Lift the bottom-right set-origin cluster above the venue carousel when it's
+  // visible (a sibling overlay in #map-pane), so the two never overlap. Only
+  // raised on md+ — on mobile the carousel sits higher (above the FAB) and the
+  // cluster stays clear at bottom-3.
+  controlsRaised?: boolean
 }) {
   const mapRef = React.useRef<MapRef>(null)
   // react-map-gl creates the GL instance asynchronously (a dynamic
@@ -467,7 +474,12 @@ export function RoomMap({
         </div>
       ) : null}
 
-      <div className="absolute right-3 bottom-3 z-10 flex flex-col items-end gap-2">
+      <div
+        className={cn(
+          "absolute right-3 z-10 flex flex-col items-end gap-2 transition-[bottom] duration-200",
+          controlsRaised ? "bottom-3 md:bottom-[13.5rem]" : "bottom-3"
+        )}
+      >
         {originError ? (
           <p className="max-w-[220px] rounded-md bg-background/90 px-2.5 py-1.5 text-xs text-destructive shadow-md ring-1 ring-border">
             {originError}

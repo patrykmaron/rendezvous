@@ -43,6 +43,7 @@ import { askAgent } from "@/app/actions/agent"
 import { changeColor, joinRoom } from "@/app/actions/room"
 import { decidePlan, toggleVote } from "@/app/actions/vote"
 import { ChatPanel } from "@/components/chat/chat-panel"
+import { VenueCarousel } from "@/components/map/venue-carousel"
 import { EventTimeChip } from "@/components/room/event-time-chip"
 import {
   CursorOverlay,
@@ -401,6 +402,58 @@ function RoomView({
   // disable surfaces only render when a plan exists, so that case is inert.
   const replanningLive = planState.replanning || agent.isActive
 
+  // Top-3 candidates of the current COMPLETE plan — the data behind the map-pane
+  // venue carousel (a sibling of RoomMap). Empty (carousel hidden) until a
+  // complete plan exists, so the first-run/failed/replanning-pre-first cases
+  // render no carousel at all.
+  const planCandidates = React.useMemo<PlanCandidate[]>(() => {
+    const p = planState.data?.plan
+    if (!p || p.status !== "complete") return []
+    return [...(p.result?.candidates ?? [])]
+      .sort((a, b) => a.rank - b.rank)
+      .slice(0, 3)
+  }, [planState.data?.plan])
+  const carouselVisible = planCandidates.length > 0
+
+  // The carousel's focus cursor (which venue card is active) and collapse state.
+  // `activeVenue` is set by the carousel's own scroll/arrows and by a venue-pin
+  // or chat-chip click (handlePreviewChange / handleVenuePreview below).
+  const [activeVenue, setActiveVenue] = React.useState<{
+    h3: string
+    index: number
+  } | null>(null)
+  const [carouselExpanded, setCarouselExpanded] = React.useState<boolean>(() => {
+    if (typeof window === "undefined") return true
+    const stored = window.sessionStorage.getItem(`rendezvous:carousel:${roomId}`)
+    if (stored === "expanded") return true
+    if (stored === "collapsed") return false
+    // Default expanded on desktop; collapsed on a phone (never auto-cover a map).
+    return window.matchMedia("(min-width: 768px)").matches
+  })
+  React.useEffect(() => {
+    window.sessionStorage.setItem(
+      `rendezvous:carousel:${roomId}`,
+      carouselExpanded ? "expanded" : "collapsed"
+    )
+  }, [roomId, carouselExpanded])
+
+  // Auto-expand (md+ only) when a NEW plan lands so a re-run resurfaces the
+  // carousel; a phone keeps the pill (its own affordance) instead.
+  const planAnalysisId = planState.data?.plan?.analysisId
+  const prevAnalysisRef = React.useRef<string | undefined>(undefined)
+  React.useEffect(() => {
+    if (!planAnalysisId) return
+    if (
+      prevAnalysisRef.current !== undefined &&
+      prevAnalysisRef.current !== planAnalysisId &&
+      window.matchMedia("(min-width: 768px)").matches
+    ) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setCarouselExpanded(true)
+    }
+    prevAnalysisRef.current = planAnalysisId
+  }, [planAnalysisId])
+
   // Fold the agent's map overlay into the shared overlay state whenever it
   // changes (its identity is content-stable — see useRoomAgent). A manual
   // focusCandidate click can override it in between; the next agent update wins
@@ -487,60 +540,118 @@ function RoomView({
   )
 
   // Paint a chosen plan candidate onto the map and fly to it: a pin for the
-  // area (its H3 cell centre) plus a pin per venue. Called from the chat
-  // results card. Guards against a malformed H3 by falling back to the venue
-  // centroid, and no-ops if neither yields a usable centre.
-  const focusCandidate = React.useCallback((candidate: PlanCandidate) => {
-    const venuePins = candidateVenuePins(candidate)
-    const venuePoints = venuePins.map((p) => p.venue)
+  // area (its H3 cell centre) plus a pin per venue, and — the G3 addition — one
+  // route line per participant built from their real TfL leg geometry
+  // (`journey.legs[].pathPoints`), coloured like the origin. pathPoints are
+  // [lat, lon] but GeoJSON wants [lng, lat], so they're flipped here (skip it
+  // and the routes land in the sea). A participant with no leg geometry falls
+  // back to a straight origin→centre line. `venueIndex` (from the carousel)
+  // flies to a specific venue at a tighter zoom instead of the area centre.
+  // Called from the chat results card and the carousel; guards a malformed H3
+  // by falling back to the venue centroid, no-ops if neither yields a centre.
+  const focusCandidate = React.useCallback(
+    (candidate: PlanCandidate, venueIndex?: number) => {
+      const venuePins = candidateVenuePins(candidate)
+      const venuePoints = venuePins.map((p) => p.venue)
 
-    let center: { lat: number; lng: number } | null = null
-    try {
-      // candidate.h3 is a DECIMAL string (ADR 0008); h3-js speaks hex. Passing
-      // the decimal straight to cellToLatLng parses it as hex and flies the map
-      // to the wrong place (mid-Atlantic). Convert first, then validate.
-      const hex = BigInt(candidate.h3).toString(16)
-      if (isValidCell(hex)) {
-        const [lat, lng] = cellToLatLng(hex)
-        if (Number.isFinite(lat) && Number.isFinite(lng)) center = { lat, lng }
+      let center: { lat: number; lng: number } | null = null
+      try {
+        // candidate.h3 is a DECIMAL string (ADR 0008); h3-js speaks hex. Passing
+        // the decimal straight to cellToLatLng parses it as hex and flies the
+        // map to the wrong place (mid-Atlantic). Convert first, then validate.
+        const hex = BigInt(candidate.h3).toString(16)
+        if (isValidCell(hex)) {
+          const [lat, lng] = cellToLatLng(hex)
+          if (Number.isFinite(lat) && Number.isFinite(lng)) center = { lat, lng }
+        }
+      } catch {
+        // Malformed H3 cell (non-numeric string) — fall through to the venue
+        // centroid.
       }
-    } catch {
-      // Malformed H3 cell (non-numeric string) — fall through to the venue
-      // centroid.
-    }
-    if (!center && venuePoints.length > 0) {
-      const sum = venuePoints.reduce(
-        (acc, v) => ({ lat: acc.lat + v.lat, lng: acc.lng + v.lng }),
-        { lat: 0, lng: 0 }
-      )
-      center = {
-        lat: sum.lat / venuePoints.length,
-        lng: sum.lng / venuePoints.length,
+      if (!center && venuePoints.length > 0) {
+        const sum = venuePoints.reduce(
+          (acc, v) => ({ lat: acc.lat + v.lat, lng: acc.lng + v.lng }),
+          { lat: 0, lng: 0 }
+        )
+        center = {
+          lat: sum.lat / venuePoints.length,
+          lng: sum.lng / venuePoints.length,
+        }
       }
-    }
-    if (!center) return
+      if (!center) return
+      const areaCenter = center
 
-    const pins: MapOverlay["pins"] = [
-      {
-        id: `candidate-${candidate.h3}`,
-        lat: center.lat,
-        lng: center.lng,
-        kind: "candidate",
-        rank: candidate.rank,
-        label: candidate.name,
-      },
-      ...venuePins.map(({ venue, id }) => ({
-        id,
-        lat: venue.lat,
-        lng: venue.lng,
-        kind: "venue" as const,
-        label: venue.name,
-        ...(venue.fsqPlaceId ? { placeId: venue.fsqPlaceId } : {}),
-        ...(venue.googlePlaceId ? { googlePlaceId: venue.googlePlaceId } : {}),
-      })),
-    ]
-    setOverlay({ pins, routes: null, focus: { ...center, zoom: 14 } })
-  }, [])
+      const pins: MapOverlay["pins"] = [
+        {
+          id: `candidate-${candidate.h3}`,
+          lat: areaCenter.lat,
+          lng: areaCenter.lng,
+          kind: "candidate",
+          rank: candidate.rank,
+          label: candidate.name,
+        },
+        ...venuePins.map(({ venue, id }) => ({
+          id,
+          lat: venue.lat,
+          lng: venue.lng,
+          kind: "venue" as const,
+          label: venue.name,
+          ...(venue.fsqPlaceId ? { placeId: venue.fsqPlaceId } : {}),
+          ...(venue.googlePlaceId ? { googlePlaceId: venue.googlePlaceId } : {}),
+        })),
+      ]
+
+      // Per-participant route geometry from real journeys, straight-line
+      // fallback when a participant has no captured leg geometry.
+      const features: GeoJSON.Feature[] = []
+      for (const p of candidate.perParticipant) {
+        const geomLegs = (p.journey?.legs ?? []).filter(
+          (l) => l.pathPoints && l.pathPoints.length >= 2
+        )
+        if (geomLegs.length > 0) {
+          for (const l of geomLegs) {
+            features.push({
+              type: "Feature",
+              geometry: {
+                type: "LineString",
+                coordinates: l.pathPoints!.map(([lat, lon]) => [lon, lat]),
+              },
+              properties: { color: p.color, mode: l.mode },
+            })
+          }
+        } else {
+          const origin = origins.find(
+            (o) => o.participantId === p.participantId
+          )
+          if (origin) {
+            features.push({
+              type: "Feature",
+              geometry: {
+                type: "LineString",
+                coordinates: [
+                  [origin.lng, origin.lat],
+                  [areaCenter.lng, areaCenter.lat],
+                ],
+              },
+              properties: { color: p.color },
+            })
+          }
+        }
+      }
+      const routes: GeoJSON.FeatureCollection | null = features.length
+        ? { type: "FeatureCollection", features }
+        : null
+
+      const targetVenue =
+        venueIndex !== undefined ? venuePins[venueIndex]?.venue : undefined
+      const focus = targetVenue
+        ? { lat: targetVenue.lat, lng: targetVenue.lng, zoom: 15 }
+        : { ...areaCenter, zoom: 14 }
+
+      setOverlay({ pins, routes, focus })
+    },
+    [origins]
+  )
 
   // Open a place-preview card for one venue on a candidate: focuses the map
   // on that candidate (as a row click would) and opens the card at the pin
@@ -549,16 +660,27 @@ function RoomView({
   // from immediately closing a card that was just opened.
   const handleVenuePreview = React.useCallback(
     (candidate: PlanCandidate, venueIndex: number) => {
-      focusCandidate(candidate)
-      // Close the mobile chat sheet so the focused map + popup are actually
-      // visible — otherwise the full-height sheet covers the map and the tap
-      // looks like it did nothing. No-op on md+: the aside's `md:` overrides
-      // (md:pointer-events-auto / md:translate-y-0) keep the desktop panel
-      // static regardless of this flag, and the floating button is md:hidden.
+      // Close the mobile chat sheet so the focused map is actually visible —
+      // otherwise the full-height sheet covers the map and the tap looks like it
+      // did nothing. No-op on md+ (the aside's `md:` overrides keep it static).
       setChatOpen(false)
       const venue = candidate.venues[venueIndex]
       if (!venue) return
-      const pin = candidateVenuePins(candidate).find((p) => p.venue === venue)
+      const pins = candidateVenuePins(candidate)
+      const filteredIndex = pins.findIndex((p) => p.venue === venue)
+      // When the carousel is up, a chip activates its card (the card IS the rich
+      // preview) instead of opening a popup that would sit over the carousel.
+      if (
+        carouselVisible &&
+        carouselExpanded &&
+        filteredIndex >= 0 &&
+        planCandidates.some((c) => c.h3 === candidate.h3)
+      ) {
+        setActiveVenue({ h3: candidate.h3, index: filteredIndex })
+        return
+      }
+      focusCandidate(candidate)
+      const pin = filteredIndex >= 0 ? pins[filteredIndex] : undefined
       if (!pin) return // non-finite coordinates — no pin was placed for it
       setPreview({
         id: pin.id,
@@ -570,7 +692,7 @@ function RoomView({
         googlePlaceId: venue.googlePlaceId,
       })
     },
-    [focusCandidate, setPreview, setChatOpen]
+    [focusCandidate, carouselVisible, carouselExpanded, planCandidates]
   )
 
   // A fresh agent overlay (or a focusCandidate call for a different
@@ -707,6 +829,48 @@ function RoomView({
       next,
     ])
   })
+
+  // The carousel reports its active card here: track the cursor, close any open
+  // popup, and focus the candidate (draws its real routes + flies the camera).
+  const handleActiveVenue = React.useCallback(
+    (candidate: PlanCandidate, venueIndex: number) => {
+      setActiveVenue({ h3: candidate.h3, index: venueIndex })
+      setPreview(null)
+      focusCandidate(candidate, venueIndex)
+    },
+    [focusCandidate]
+  )
+
+  // Voter dot colours, resolved from the members cache (near-static — a colour
+  // change is rare and re-renders via member:update anyway).
+  const getMemberColor = React.useCallback(
+    (participantId: string) => membersRef.current.get(participantId)?.color,
+    []
+  )
+
+  // Venue-pin clicks: when the carousel is expanded, route a top-3 venue pin to
+  // the matching card (no popup — it would double up over the carousel).
+  // Everything else keeps the existing preview-popup behaviour.
+  const handlePreviewChange = React.useCallback(
+    (target: PlacePreviewTarget | null) => {
+      if (target && carouselVisible && carouselExpanded) {
+        const m = /^venue-(\d+)-(\d+)$/.exec(target.id)
+        if (m) {
+          const h3 = m[1]!
+          const index = Number(m[2])
+          if (index < 5 && planCandidates.some((c) => c.h3 === h3)) {
+            setActiveVenue({ h3, index })
+            return
+          }
+        }
+      }
+      setPreview(target)
+    },
+    [carouselVisible, carouselExpanded, planCandidates]
+  )
+
+  // Lift the map's set-origin cluster above the carousel while it's expanded.
+  const controlsRaised = carouselVisible && carouselExpanded
 
   function handleColorChange(hex: string) {
     if (hex === myColor) {
@@ -870,8 +1034,30 @@ function RoomView({
             origins={origins}
             overlay={overlay}
             preview={preview}
-            onPreviewChange={setPreview}
+            onPreviewChange={handlePreviewChange}
+            controlsRaised={controlsRaised}
           />
+          {carouselVisible ? (
+            <VenueCarousel
+              candidates={planCandidates}
+              votes={planState.data?.votes ?? []}
+              myVotes={planState.data?.myVotes ?? []}
+              decision={planState.data?.decision ?? null}
+              eventAt={eventAt}
+              replanning={replanningLive}
+              isHost={isHost}
+              myColor={myColor}
+              roomId={roomId}
+              sessionToken={session.sessionToken}
+              getMemberColor={getMemberColor}
+              activeVenue={activeVenue}
+              onActiveVenue={handleActiveVenue}
+              onToggleVote={handleToggleVote}
+              onDecide={handleDecide}
+              expanded={carouselExpanded}
+              onExpandedChange={setCarouselExpanded}
+            />
+          ) : null}
         </div>
         {/* Mobile (<md): a full-height sheet toggled by the floating chat
             button below, sliding up over the map. Desktop (md+): the usual

@@ -47,43 +47,41 @@ export function usePlacePreview(
   const debounceMs = opts?.debounceMs ?? 300
   const [state, setState] = React.useState<PlacePreviewState>({ kind: "idle" })
 
-  // Read the target through a ref so the effect can depend on its stable cache
-  // key (content) rather than the object identity, which changes every render.
-  const targetRef = React.useRef(target)
-  targetRef.current = target
+  // Depend on the target's primitive fields (its stable content), not the
+  // object identity — which changes every render — so the fetch fires only when
+  // the target actually changes. `key` is their cache-keyed join.
+  const name = target?.name
+  const lat = target?.lat
+  const lng = target?.lng
+  const gp = target?.googlePlaceId
+  const fsq = target?.fsqPlaceId
   const key = target ? cacheKey(target) : null
 
   React.useEffect(() => {
-    const t = targetRef.current
-    if (!t || key === null) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (key === null || name === undefined || lat === undefined || lng === undefined) {
       setState({ kind: "idle" })
       return
     }
 
     const cached = CACHE.get(key)
     if (cached) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setState(
-        cached.ok
-          ? { kind: "ok", place: cached.place }
-          : { kind: "unavailable" }
+        cached.ok ? { kind: "ok", place: cached.place } : { kind: "unavailable" }
       )
       return
     }
 
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setState({ kind: "loading" })
     const controller = new AbortController()
     const timer = setTimeout(() => {
       const params = new URLSearchParams({
         roomId,
-        name: t.name,
-        lat: String(t.lat),
-        lng: String(t.lng),
+        name,
+        lat: String(lat),
+        lng: String(lng),
       })
-      if (t.googlePlaceId) params.set("gp", t.googlePlaceId)
-      if (t.fsqPlaceId) params.set("fsq", t.fsqPlaceId)
+      if (gp) params.set("gp", gp)
+      if (fsq) params.set("fsq", fsq)
 
       fetch(`/api/places/preview?${params.toString()}`, {
         headers: { Authorization: `Bearer ${sessionToken}` },
@@ -110,7 +108,7 @@ export function usePlacePreview(
       clearTimeout(timer)
       controller.abort()
     }
-  }, [key, roomId, sessionToken, debounceMs])
+  }, [key, name, lat, lng, gp, fsq, roomId, sessionToken, debounceMs])
 
   return state
 }
